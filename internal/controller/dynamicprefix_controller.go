@@ -103,7 +103,7 @@ func (r *DynamicPrefixReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if err := r.Update(ctx, &dp); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
 	// Get or create the receiver for this DynamicPrefix
@@ -284,7 +284,10 @@ func (r *DynamicPrefixReconciler) handlePrefixChange(ctx context.Context, dp *dy
 			dp.Status.History = dp.Status.History[len(dp.Status.History)-maxHistory:]
 		}
 
-		log.Info("Added prefix to history", "prefix", dp.Status.CurrentPrefix, "state", dynamicprefixiov1alpha1.PrefixStateDraining)
+		log.Info("Added prefix to history",
+			"oldPrefix", dp.Status.CurrentPrefix,
+			"newPrefix", newPrefix.Network.String(),
+			"state", dynamicprefixiov1alpha1.PrefixStateDraining)
 	}
 }
 

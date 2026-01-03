@@ -178,10 +178,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.DynamicPrefixReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	if err := controller.NewDynamicPrefixReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+	).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DynamicPrefix")
 		os.Exit(1)
 	}

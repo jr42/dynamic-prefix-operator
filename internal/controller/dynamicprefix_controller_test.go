@@ -93,7 +93,7 @@ var _ = Describe("DynamicPrefix Controller", func() {
 			// First reconcile adds finalizer
 			result, err := reconciler.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeTrue())
+			Expect(result.RequeueAfter).To(Equal(time.Second))
 
 			// Second reconcile processes the prefix
 			result, err = reconciler.Reconcile(ctx, req)

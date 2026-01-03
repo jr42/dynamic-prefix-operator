@@ -102,6 +102,16 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	"$(GOLANGCI_LINT)" config verify
 
+.PHONY: helm-lint
+helm-lint: ## Lint Helm charts
+	@command -v helm >/dev/null 2>&1 || { echo "Helm is not installed. Please install helm."; exit 1; }
+	helm lint charts/dynamic-prefix-operator
+
+.PHONY: helm-template
+helm-template: ## Render Helm chart templates for validation
+	@command -v helm >/dev/null 2>&1 || { echo "Helm is not installed. Please install helm."; exit 1; }
+	helm template test charts/dynamic-prefix-operator
+
 ##@ Build
 
 .PHONY: build

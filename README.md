@@ -156,13 +156,14 @@ spec:
       enabled: true
 
   # Subnet allocation from the received prefix
+  # Offset is the subnet index: 0 = first subnet, 1 = second, etc.
   subnets:
     - name: loadbalancers
-      offset: 0x1000        # Offset within the prefix
+      offset: 0             # First /120 subnet
       prefixLength: 120     # /120 = 256 addresses
 
     - name: dmz
-      offset: 0x2000
+      offset: 1             # Second /112 subnet
       prefixLength: 112
 
   # Transition settings
@@ -182,9 +183,9 @@ status:
 
   subnets:
     - name: loadbalancers
-      cidr: "2001:db8:1234::1000/120"
+      cidr: "2001:db8:1234::/120"      # Offset 0 = first /120
     - name: dmz
-      cidr: "2001:db8:1234::2000/112"
+      cidr: "2001:db8:1234::1:0/112"   # Offset 1 = second /112
 
   conditions:
     - type: PrefixAcquired
@@ -245,7 +246,7 @@ spec:
       interface: eth0
   subnets:
     - name: loadbalancers
-      offset: 0x1000
+      offset: 0           # First /120 subnet
       prefixLength: 120
 ```
 
