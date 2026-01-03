@@ -1,0 +1,90 @@
+# Example: Pools that reference DynamicPrefix via annotations
+# The operator watches for these annotations and keeps the pools in sync.
+#
+# This follows the 1Password Operator pattern where target resources
+# reference the source via annotations, rather than requiring a
+# separate binding resource.
+---
+# Cilium LoadBalancer IP Pool for external services
+apiVersion: cilium.io/v2alpha1
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: ipv6-loadbalancers
+  annotations:
+    # Reference to the DynamicPrefix resource
+    dynamic-prefix.io/name: home-ipv6
+
+    # Which subnet from the DynamicPrefix to use
+    dynamic-prefix.io/subnet: loadbalancers
+spec:
+  # The operator manages this - it will populate/update the CIDR
+  # based on the current prefix from the DynamicPrefix resource
+  blocks: []
+
+  # You can still add static configuration
+  # serviceSelector:
+  #   matchLabels:
+  #     io.cilium/lb-ipam: ipv6
+
+---
+# Cilium LoadBalancer IP Pool for DMZ services
+apiVersion: cilium.io/v2alpha1
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: ipv6-dmz
+  annotations:
+    dynamic-prefix.io/name: home-ipv6
+    dynamic-prefix.io/subnet: dmz
+spec:
+  blocks: []
+  serviceSelector:
+    matchLabels:
+      zone: dmz
+
+---
+# CiliumCIDRGroup for network policies
+# Use this to allow/deny traffic from your dynamic prefix
+apiVersion: cilium.io/v2
+kind: CiliumCIDRGroup
+metadata:
+  name: home-network
+  annotations:
+    dynamic-prefix.io/name: home-ipv6
+    dynamic-prefix.io/subnet: all  # Use the full prefix
+spec:
+  # The operator manages this
+  externalCIDRs: []
+
+---
+# Example network policy using the CIDRGroup
+# This allows traffic from your home network, even when the prefix changes
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-from-home
+  namespace: default
+spec:
+  endpointSelector:
+    matchLabels:
+      app: my-service
+  ingress:
+    - fromCIDRSet:
+        # References the operator-managed CIDRGroup
+        - cidrGroupRef: home-network
+
+---
+# After the operator processes these, they'll look like:
+#
+# apiVersion: cilium.io/v2alpha1
+# kind: CiliumLoadBalancerIPPool
+# metadata:
+#   name: ipv6-loadbalancers
+#   annotations:
+#     dynamic-prefix.io/name: home-ipv6
+#     dynamic-prefix.io/subnet: loadbalancers
+#     dynamic-prefix.io/last-sync: "2025-01-03T10:00:00Z"
+# spec:
+#   blocks:
+#     - cidr: "2001:db8:1234:ab00::1000/120"  # Populated by operator
+#
+# When the prefix changes, the operator automatically updates the CIDR.

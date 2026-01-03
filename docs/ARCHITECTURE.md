@@ -3,65 +3,54 @@
 ## System Context
 
 ```
+                              Upstream Router / ISP
+                                       │
+                                       │ DHCPv6-PD (delegates prefix)
+                                       │ or Router Advertisements
+                                       ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                              ISP Network                                      │
-│                                                                              │
-│   DHCPv6 Server                    Router                                    │
-│   (Prefix Delegation)              (Router Advertisements)                   │
-│         │                                │                                   │
-└─────────┼────────────────────────────────┼───────────────────────────────────┘
-          │ DHCPv6-PD                      │ ICMPv6 RA
-          │ (SOLICIT/ADVERTISE/           │ (Prefix Information)
-          │  REQUEST/REPLY)                │
-          ▼                                ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                         Kubernetes Node                                       │
+│                              Kubernetes Node                                  │
 │                                                                              │
 │   ┌────────────────────────────────────────────────────────────────────────┐ │
-│   │                    Dynamic Prefix Operator                              │ │
+│   │                       Dynamic Prefix Operator                           │ │
 │   │                                                                         │ │
-│   │  ┌─────────────────┐         ┌─────────────────┐                       │ │
-│   │  │ DHCPv6-PD       │         │ RA Monitor      │                       │ │
-│   │  │ Client          │         │                 │                       │ │
-│   │  │                 │         │                 │                       │ │
-│   │  │ • Acquire prefix│         │ • Parse RAs     │                       │ │
-│   │  │ • Manage lease  │         │ • Extract PIOs  │                       │ │
-│   │  │ • Handle renew  │         │ • Track validity│                       │ │
-│   │  └────────┬────────┘         └────────┬────────┘                       │ │
-│   │           │                           │                                 │ │
-│   │           └───────────┬───────────────┘                                 │ │
-│   │                       ▼                                                 │ │
-│   │           ┌─────────────────────────┐                                   │ │
-│   │           │    Prefix Store         │                                   │ │
-│   │           │                         │                                   │ │
-│   │           │ • Current prefix        │                                   │ │
-│   │           │ • Prefix history        │                                   │ │
-│   │           │ • Lease state           │                                   │ │
-│   │           └───────────┬─────────────┘                                   │ │
-│   │                       │                                                 │ │
-│   │                       ▼                                                 │ │
-│   │           ┌─────────────────────────────────────────────────────────┐   │ │
-│   │           │              Controllers                                │   │ │
-│   │           │                                                         │   │ │
-│   │           │  DynamicPrefix          DynamicPrefixBinding            │   │ │
-│   │           │  Controller             Controller                      │   │ │
-│   │           │      │                       │                          │   │ │
-│   │           │      │    Reconcile          │    Reconcile             │   │ │
-│   │           │      ▼                       ▼                          │   │ │
-│   │           │  ┌────────────────┐   ┌─────────────────────────────┐   │   │ │
-│   │           │  │ DynamicPrefix  │   │ Backend Manager             │   │   │ │
-│   │           │  │ CR (status)    │   │                             │   │   │ │
-│   │           │  └────────────────┘   │ • Cilium LB-IPAM Backend   │   │   │ │
-│   │           │                       │ • Cilium CIDRGroup Backend │   │   │ │
-│   │           │                       │ • (Future: Calico, MetalLB)│   │   │ │
-│   │           │                       └─────────────────────────────┘   │   │ │
-│   │           └─────────────────────────────────────────────────────────┘   │ │
-│   │                                        │                                │ │
-│   └────────────────────────────────────────┼────────────────────────────────┘ │
-│                                            │                                  │
-└────────────────────────────────────────────┼──────────────────────────────────┘
-                                             │ Update
-                                             ▼
+│   │  ┌─────────────────────────────────────────────────────────────────┐   │ │
+│   │  │                     Prefix Receiver                              │   │ │
+│   │  │                                                                  │   │ │
+│   │  │  ┌─────────────────┐         ┌─────────────────┐                │   │ │
+│   │  │  │ DHCPv6-PD Client│         │ RA Monitor      │                │   │ │
+│   │  │  │                 │         │                 │                │   │ │
+│   │  │  │ • SOLICIT/REPLY │         │ • Parse RAs     │                │   │ │
+│   │  │  │ • Lease renewal │         │ • Extract PIOs  │                │   │ │
+│   │  │  └────────┬────────┘         └────────┬────────┘                │   │ │
+│   │  │           └──────────┬───────────────┘                          │   │ │
+│   │  │                      ▼                                          │   │ │
+│   │  │           ┌──────────────────────┐                              │   │ │
+│   │  │           │    Prefix Store      │                              │   │ │
+│   │  │           │  • Current prefix    │                              │   │ │
+│   │  │           │  • Lease state       │                              │   │ │
+│   │  │           └──────────────────────┘                              │   │ │
+│   │  └─────────────────────────────────────────────────────────────────┘   │ │
+│   │                            │                                            │ │
+│   │                            ▼                                            │ │
+│   │  ┌─────────────────────────────────────────────────────────────────┐   │ │
+│   │  │                      Controllers                                 │   │ │
+│   │  │                                                                  │   │ │
+│   │  │  DynamicPrefix Controller        Pool Controller                 │   │ │
+│   │  │  • Manages prefix lifecycle      • Watches annotated pools       │   │ │
+│   │  │  • Calculates subnets            • Updates CIDRs on change       │   │ │
+│   │  │  • Updates CR status             • Handles multiple pool types   │   │ │
+│   │  │         │                                │                       │   │ │
+│   │  │         ▼                                ▼                       │   │ │
+│   │  │  ┌────────────────┐        ┌─────────────────────────────────┐  │   │ │
+│   │  │  │ DynamicPrefix  │        │ Pools with annotations:         │  │   │ │
+│   │  │  │ CR (status)    │◄───────│ dynamic-prefix.io/name: xxx     │  │   │ │
+│   │  │  └────────────────┘        └─────────────────────────────────┘  │   │ │
+│   │  └─────────────────────────────────────────────────────────────────┘   │ │
+│   └────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                         Kubernetes Resources                                  │
 │                                                                              │
@@ -69,8 +58,12 @@
 │   │ CiliumLoadBalancer     │    │ CiliumCIDRGroup        │                   │
 │   │ IPPool                 │    │                        │                   │
 │   │                        │    │ • Network policies     │                   │
-│   │ • LB-IPAM allocation   │    │ • Egress rules         │                   │
-│   │ • Service IPs          │    │                        │                   │
+│   │ annotations:           │    │ annotations:           │                   │
+│   │   dynamic-prefix.io/   │    │   dynamic-prefix.io/   │                   │
+│   │     name: home-ipv6    │    │     name: home-ipv6    │                   │
+│   │                        │    │                        │                   │
+│   │ spec.blocks: [CIDR]    │    │ spec.externalCIDRs:    │                   │
+│   │ (managed by operator)  │    │   [CIDR]               │                   │
 │   └───────────┬────────────┘    └────────────────────────┘                   │
 │               │                                                              │
 │               ▼                                                              │
@@ -82,7 +75,7 @@
 │               │                                                              │
 │               ▼                                                              │
 │   ┌────────────────────────┐                                                 │
-│   │ external-dns           │─────────▶ Route53 / CloudFlare                  │
+│   │ external-dns           │─────────▶ DNS Provider                          │
 │   │                        │           (AAAA record update)                  │
 │   │ • Watches LB services  │                                                 │
 │   │ • Updates DNS          │                                                 │
@@ -93,35 +86,35 @@
 
 ## Component Details
 
-### 1. Prefix Acquisition Layer
+### 1. Prefix Receiver Layer
 
 #### DHCPv6-PD Client
 
-The primary method for obtaining IPv6 prefixes. Uses the [insomniacslk/dhcp](https://github.com/insomniacslk/dhcp) library.
+The operator acts as a DHCPv6 Prefix Delegation client, receiving prefixes from the upstream router.
 
 **Protocol Flow:**
 ```
-Client                          Server
-   │                               │
-   │──── SOLICIT (IA_PD) ─────────▶│
-   │                               │
-   │◀─── ADVERTISE (IA_PD) ────────│
-   │                               │
-   │──── REQUEST (IA_PD) ──────────▶│
-   │                               │
-   │◀─── REPLY (IA_PD, prefix) ────│
-   │                               │
-   │    ... lease active ...       │
-   │                               │
-   │──── RENEW (before T1) ────────▶│
-   │                               │
-   │◀─── REPLY (renewed lease) ────│
-   │                               │
+Operator                        Upstream Router
+   │                                   │
+   │──── SOLICIT (IA_PD) ─────────────▶│
+   │                                   │
+   │◀─── ADVERTISE (IA_PD) ────────────│
+   │                                   │
+   │──── REQUEST (IA_PD) ──────────────▶│
+   │                                   │
+   │◀─── REPLY (IA_PD, prefix) ────────│
+   │                                   │
+   │    ... lease active ...           │
+   │                                   │
+   │──── RENEW (before T1) ────────────▶│
+   │                                   │
+   │◀─── REPLY (renewed lease) ────────│
+   │                                   │
 ```
 
 **Key Features:**
-- Configurable prefix length request (e.g., /60 from a /56)
-- DUID persistence for stable identity
+- Receives delegated prefix from upstream router
+- Configurable prefix length hint
 - T1/T2 timer management for renewal
 - Rebind fallback if renewal fails
 
@@ -134,202 +127,142 @@ Fallback/supplementary prefix detection using [mdlayher/ndp](https://github.com/
 - Prefix Information Options (PIO)
 - Valid and preferred lifetimes
 
-**Use cases:**
-- Networks without DHCPv6-PD
-- Prefix validation (cross-check with DHCPv6-PD)
-- Faster detection of prefix changes
-
 ### 2. Controller Layer
 
 #### DynamicPrefix Controller
 
 **Responsibilities:**
-- Manages the lifecycle of DynamicPrefix resources
-- Starts/stops prefix acquirers based on spec
-- Calculates subnets from acquired prefix
-- Maintains prefix history
-- Handles graceful transitions
+- Manages DynamicPrefix resource lifecycle
+- Starts/stops prefix receivers
+- Calculates subnets from received prefix
+- Updates CR status
 
 **Reconciliation Triggers:**
 - DynamicPrefix create/update/delete
-- Prefix change detected by acquirer
+- Prefix change from receiver
 - Lease expiry approaching
-- Periodic resync
 
-#### DynamicPrefixBinding Controller
+#### Pool Controller
 
 **Responsibilities:**
-- Watches DynamicPrefix status changes
-- Updates target resources (pools, groups) via backends
-- Manages binding status
-- Handles update strategies (Replace vs Append)
+- Watches for pools with `dynamic-prefix.io/name` annotation
+- Looks up referenced DynamicPrefix
+- Updates pool CIDR from DynamicPrefix status
+- Re-reconciles when DynamicPrefix changes
 
-**Reconciliation Triggers:**
-- DynamicPrefixBinding create/update/delete
-- Referenced DynamicPrefix status change
-- Target resource modification
-
-### 3. Backend Layer
-
-#### Backend Interface
-
-```go
-type Backend interface {
-    Name() string
-    Supports(target TargetRef) bool
-    Update(ctx context.Context, target TargetRef, prefix netip.Prefix, strategy UpdateStrategy) error
-    Remove(ctx context.Context, target TargetRef, prefix netip.Prefix) error
-    Validate(ctx context.Context, target TargetRef) error
-}
-```
-
-#### Cilium LB-IPAM Backend
-
-Updates `CiliumLoadBalancerIPPool` resources:
+**Annotation-Based Binding:**
 
 ```yaml
+# Pool references DynamicPrefix via annotation
 apiVersion: cilium.io/v2alpha1
 kind: CiliumLoadBalancerIPPool
 metadata:
-  name: ipv6-pool
+  annotations:
+    dynamic-prefix.io/name: home-ipv6       # Which DynamicPrefix
+    dynamic-prefix.io/subnet: loadbalancers # Which subnet
 spec:
-  blocks:
-    - cidr: "2001:db8:1234::1000/120"  # Updated by operator
+  blocks: []  # Operator manages this
 ```
 
-**Update Strategies:**
-- `Replace`: Overwrites all blocks with new prefix
-- `Append`: Adds new prefix, keeps existing (for graceful transitions)
+This follows the [1Password Operator](https://github.com/1Password/onepassword-operator) pattern:
+- Simpler than explicit binding CRDs
+- Pools are self-documenting
+- No orphaned resources
 
-#### Cilium CIDRGroup Backend
+### 3. Pool Handlers
 
-Updates `CiliumCIDRGroup` resources for network policies:
+Each pool type has a handler that knows how to update it:
 
-```yaml
-apiVersion: cilium.io/v2
-kind: CiliumCIDRGroup
-metadata:
-  name: home-prefix
-spec:
-  externalCIDRs:
-    - "2001:db8:1234::/60"  # Updated by operator
+```go
+type PoolHandler interface {
+    // Extract annotation values
+    GetAnnotations(obj client.Object) (prefixName, subnetName string, ok bool)
+
+    // Update the pool's CIDR field
+    UpdateCIDR(ctx context.Context, obj client.Object, cidr netip.Prefix) error
+}
 ```
 
-### 4. Transition Layer
-
-Manages graceful prefix transitions to minimize service disruption.
-
-**Transition Flow:**
-
-```
-Time ──────────────────────────────────────────────────────────────▶
-
-     Prefix A Active          Both Active              Prefix B Active
-     ┌────────────────────────┬─────────────────────────┬─────────────────
-     │                        │                         │
-     │  Pool: [A]             │  Pool: [A, B]           │  Pool: [B]
-     │  DNS: A                │  DNS: B                 │  DNS: B
-     │                        │  (external-dns updates) │
-     │                        │                         │
-     └────────────────────────┴─────────────────────────┴─────────────────
-                              │                         │
-                        Prefix change              Drain complete
-                        detected                   (configurable)
+**Cilium LB-IPAM Handler:**
+```go
+func (h *LBIPAMHandler) UpdateCIDR(ctx context.Context, obj client.Object, cidr netip.Prefix) error {
+    pool := obj.(*ciliumv2alpha1.CiliumLoadBalancerIPPool)
+    pool.Spec.Blocks = []CiliumLoadBalancerIPPoolIPBlock{
+        {Cidr: IPv6CIDR(cidr.String())},
+    }
+    return nil
+}
 ```
 
-**Key Mechanisms:**
-- Append new prefix before removing old
-- Configurable drain period (default: 60 minutes)
-- DNS TTL consideration
-- Event emission for monitoring
+**Cilium CIDRGroup Handler:**
+```go
+func (h *CIDRGroupHandler) UpdateCIDR(ctx context.Context, obj client.Object, cidr netip.Prefix) error {
+    group := obj.(*ciliumv2.CiliumCIDRGroup)
+    group.Spec.ExternalCIDRs = []ExternalCIDR{ExternalCIDR(cidr.String())}
+    return nil
+}
+```
 
 ## Data Flow
 
-### Prefix Acquisition Flow
+### Prefix Reception Flow
 
 ```
-1. Operator starts
-2. Reads DynamicPrefix CR
-3. Creates DHCPv6-PD client for specified interface
-4. Client sends SOLICIT with IA_PD
-5. Receives ADVERTISE, sends REQUEST
-6. Receives REPLY with delegated prefix
-7. Updates DynamicPrefix status.currentPrefix
-8. Calculates subnets per spec
-9. Updates status.subnets
-10. Triggers binding reconciliation
-11. Schedules renewal based on T1
+1. Operator starts, reads DynamicPrefix CR
+2. Creates DHCPv6-PD client for specified interface
+3. Client sends SOLICIT with IA_PD
+4. Receives REPLY with delegated prefix
+5. Updates DynamicPrefix status.currentPrefix
+6. Calculates subnets per spec
+7. Updates status.subnets
+8. Schedules renewal based on T1
 ```
 
-### Binding Update Flow
+### Pool Update Flow
 
 ```
-1. DynamicPrefix status changes
-2. DynamicPrefixBinding controller triggered
-3. Reads binding spec (target, strategy)
-4. Gets appropriate backend for target kind
-5. Calls backend.Update() with new prefix
-6. Updates binding status
-7. Emits BindingSynced event
+1. Pool created with dynamic-prefix.io/name annotation
+2. Pool controller detects annotation
+3. Looks up referenced DynamicPrefix
+4. Gets subnet CIDR from status
+5. Updates pool's CIDR field
+6. Pool is now in sync
 ```
 
-### Graceful Transition Flow
+### Prefix Change Flow
 
 ```
-1. New prefix detected (different from current)
-2. Start transition:
-   a. Add new prefix to all bindings (Append)
-   b. Record old prefix in history
-   c. Start drain timer
-3. During drain:
-   a. Both prefixes active in pools
-   b. New IPs allocated from new prefix
-   c. DNS updates to new prefix
-4. Drain complete:
-   a. Remove old prefix from bindings
-   b. Update history state to "expired"
-   c. Emit DrainCompleted event
+1. DHCPv6-PD client receives new prefix
+2. DynamicPrefix controller updates status
+3. Pool controller sees status change
+4. Finds all pools referencing this DynamicPrefix
+5. Updates each pool with new CIDR
+6. external-dns sees new LB IPs, updates DNS
 ```
 
-## Custom Resource Definitions
+## Custom Resource Definition
 
 ### DynamicPrefix
 
-**Purpose:** Represents a dynamically acquired IPv6 prefix
+**Purpose:** Represents a dynamically received IPv6 prefix
 
 **Spec:**
-- `acquisition`: How to obtain the prefix (DHCPv6-PD, RA)
+- `acquisition`: How to receive the prefix (DHCPv6-PD, RA)
 - `subnets`: How to subdivide the prefix
 - `transition`: Graceful transition settings
 
 **Status:**
 - `currentPrefix`: Currently active prefix
-- `prefixSource`: How prefix was acquired
-- `leaseExpiresAt`: When DHCP lease expires
+- `prefixSource`: How prefix was received
+- `leaseExpiresAt`: When DHCPv6 lease expires
 - `subnets`: Calculated subnet CIDRs
-- `history`: Previous prefixes with states
 - `conditions`: Standard Kubernetes conditions
-
-### DynamicPrefixBinding
-
-**Purpose:** Binds a DynamicPrefix subnet to a target resource
-
-**Spec:**
-- `prefixRef`: Reference to DynamicPrefix and subnet
-- `target`: Target resource (kind, name, namespace)
-- `updateStrategy`: How to update target (Replace, Append)
-
-**Status:**
-- `boundPrefix`: Currently bound prefix
-- `targetSynced`: Whether target is up to date
-- `lastSyncTime`: Last successful sync
-- `lastSyncError`: Last error if any
 
 ## Failure Modes and Recovery
 
 ### DHCPv6-PD Server Unavailable
 
-**Detection:** SOLICIT timeout, no ADVERTISE received
+**Detection:** SOLICIT timeout
 
 **Recovery:**
 1. Retry with exponential backoff
@@ -337,67 +270,46 @@ Time ─────────────────────────
 3. Keep using cached prefix if valid lifetime remains
 4. Emit PrefixAcquisitionFailed event
 
-### Prefix Change During Active Connections
+### Prefix Change
 
 **Detection:** New prefix differs from current
 
 **Recovery:**
-1. Start graceful transition (don't immediately remove old)
-2. Both prefixes active during drain period
-3. New connections use new prefix
-4. Old connections drain naturally
-5. Remove old prefix after drain
-
-### Backend Update Failure
-
-**Detection:** Backend.Update() returns error
-
-**Recovery:**
-1. Retry with exponential backoff
-2. Update binding status with error
-3. Emit BindingSyncFailed event
-4. Continue retrying on subsequent reconciliations
+1. Update DynamicPrefix status
+2. Pool controller updates all referencing pools
+3. DNS updates via external-dns
+4. Optional: Graceful transition with drain period
 
 ### Operator Restart
 
-**Detection:** N/A (startup condition)
-
 **Recovery:**
 1. Read all DynamicPrefix CRs
-2. Re-establish prefix acquirers
-3. Reconcile all bindings
-4. Resume any pending drain timers
+2. Re-establish prefix receivers
+3. Reconcile all annotated pools
+4. Resume lease renewals
 
 ## Security Considerations
 
 ### Network Access
 
-The operator requires raw socket access for DHCPv6 and NDP:
+The operator requires raw socket access:
 
 ```yaml
 securityContext:
   capabilities:
     add:
       - NET_RAW
-      - NET_BIND_SERVICE
 ```
 
-**Host network required** for binding to physical interfaces.
+**Host network required** for interface binding.
 
 ### RBAC
 
-Minimal permissions following principle of least privilege:
-
-- Read/write own CRDs (DynamicPrefix, DynamicPrefixBinding)
-- Update Cilium resources (pools, groups)
+Minimal permissions:
+- Read/write DynamicPrefix CRs
+- Update Cilium pools (only annotated ones)
 - Create events
-- Leader election resources
-
-### Secret Handling
-
-Currently no secrets required. Future consideration:
-- Encrypted DUID storage
-- Backend credentials if needed
+- Leader election
 
 ## Observability
 
@@ -405,93 +317,41 @@ Currently no secrets required. Future consideration:
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `dynamic_prefix_acquisitions_total` | Counter | Total prefix acquisitions by status |
-| `dynamic_prefix_changes_total` | Counter | Prefix changes detected |
-| `dynamic_prefix_lease_expiry_seconds` | Gauge | Seconds until lease expires |
-| `dynamic_prefix_binding_sync_duration_seconds` | Histogram | Binding sync latency |
-| `dynamic_prefix_drain_period_remaining_seconds` | Gauge | Drain time remaining |
+| `dynamic_prefix_received_total` | Counter | Prefixes received |
+| `dynamic_prefix_changes_total` | Counter | Prefix changes |
+| `dynamic_prefix_lease_expiry_seconds` | Gauge | Seconds until expiry |
+| `dynamic_prefix_pools_synced` | Gauge | Pools currently synced |
 
 ### Events
 
 | Event | When |
 |-------|------|
-| `PrefixAcquired` | New prefix obtained |
+| `PrefixReceived` | New prefix obtained |
 | `PrefixChanged` | Prefix changed |
-| `PrefixRenewed` | Lease renewed |
-| `PrefixExpired` | Lease expired without renewal |
-| `BindingSynced` | Backend successfully updated |
-| `BindingSyncFailed` | Backend update failed |
-| `DrainStarted` | Transition drain started |
-| `DrainCompleted` | Old prefix removed |
-
-### Logging
-
-Structured JSON logging via zap:
-
-```json
-{
-  "level": "info",
-  "ts": "2025-01-03T10:00:00Z",
-  "logger": "dynamicprefix-controller",
-  "msg": "prefix changed",
-  "dynamicprefix": "home-ipv6",
-  "old_prefix": "2001:db8:old::/60",
-  "new_prefix": "2001:db8:new::/60",
-  "source": "dhcpv6-pd"
-}
-```
+| `PoolUpdated` | Pool CIDR updated |
 
 ## Extensibility
 
-### Adding New Backends
+### Adding New Pool Types
 
-1. Implement the `Backend` interface
-2. Register in backend manager
-3. Add target kind to CRD enum
-4. Document configuration
+1. Implement `PoolHandler` interface
+2. Register in pool controller
+3. Document annotation usage
 
 Example for MetalLB:
 
 ```go
-// internal/backend/metallb/addresspool.go
-type AddressPoolBackend struct {
-    client client.Client
-}
+type MetalLBHandler struct{}
 
-func (b *AddressPoolBackend) Name() string {
-    return "metallb-addresspool"
-}
-
-func (b *AddressPoolBackend) Supports(target TargetRef) bool {
-    return target.Kind == "IPAddressPool"
-}
-
-func (b *AddressPoolBackend) Update(ctx context.Context, target TargetRef, prefix netip.Prefix, strategy UpdateStrategy) error {
-    // Implementation
+func (h *MetalLBHandler) UpdateCIDR(ctx context.Context, obj client.Object, cidr netip.Prefix) error {
+    pool := obj.(*metallbv1beta1.IPAddressPool)
+    pool.Spec.Addresses = []string{cidr.String()}
+    return nil
 }
 ```
 
 ### Adding New Prefix Sources
 
-1. Implement the `Acquirer` interface
+1. Implement `Receiver` interface
 2. Add configuration to DynamicPrefix spec
-3. Register in acquirer manager
-4. Document configuration
-
-Example for static configuration:
-
-```go
-// internal/prefix/static/provider.go
-type StaticProvider struct {
-    prefix netip.Prefix
-}
-
-func (p *StaticProvider) Acquire(ctx context.Context) (*Prefix, error) {
-    return &Prefix{
-        Network:       p.prefix,
-        ValidLifetime: time.Hour * 24 * 365, // 1 year
-        Source:        PrefixSourceStatic,
-        AcquiredAt:    time.Now(),
-    }, nil
-}
-```
+3. Register in receiver manager

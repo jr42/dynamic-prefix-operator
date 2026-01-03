@@ -39,7 +39,6 @@ dynamic-prefix-operator/
 ├── api/
 │   └── v1alpha1/
 │       ├── dynamicprefix_types.go      # DynamicPrefix CRD
-│       ├── dynamicprefixbinding_types.go # DynamicPrefixBinding CRD
 │       ├── groupversion_info.go
 │       ├── zz_generated.deepcopy.go
 │       └── webhook_validation.go       # CEL validation webhooks
@@ -51,12 +50,12 @@ dynamic-prefix-operator/
 ├── internal/
 │   ├── controller/
 │   │   ├── dynamicprefix_controller.go     # Main reconciler
-│   │   ├── dynamicprefixbinding_controller.go
+│   │   ├── pool_controller.go              # Watches annotated pools
 │   │   ├── suite_test.go                   # envtest setup
 │   │   └── dynamicprefix_controller_test.go
 │   │
 │   ├── prefix/
-│   │   ├── acquirer.go           # Interface for prefix acquisition
+│   │   ├── receiver.go           # Interface for prefix reception
 │   │   ├── dhcpv6/
 │   │   │   ├── client.go         # DHCPv6-PD client implementation
 │   │   │   ├── lease.go          # Lease management
@@ -66,20 +65,19 @@ dynamic-prefix-operator/
 │   │   │   └── monitor_test.go
 │   │   └── store.go              # Prefix state management
 │   │
-│   ├── backend/
-│   │   ├── interface.go          # Backend plugin interface
+│   ├── pool/
+│   │   ├── manager.go            # Pool discovery and updates
 │   │   ├── cilium/
-│   │   │   ├── lbipam.go         # CiliumLoadBalancerIPPool updater
-│   │   │   ├── cidrgroup.go      # CiliumCIDRGroup updater
+│   │   │   ├── lbipam.go         # CiliumLoadBalancerIPPool handler
+│   │   │   ├── cidrgroup.go      # CiliumCIDRGroup handler
 │   │   │   └── cilium_test.go
-│   │   ├── calico/               # Future: Calico backend
+│   │   ├── calico/               # Future: Calico
 │   │   │   └── ippool.go
-│   │   └── metallb/              # Future: MetalLB backend
+│   │   └── metallb/              # Future: MetalLB
 │   │       └── addresspool.go
 │   │
 │   └── transition/
 │       ├── manager.go            # Graceful transition logic
-│       ├── drain.go              # Drain period management
 │       └── manager_test.go
 │
 ├── config/
@@ -93,65 +91,142 @@ dynamic-prefix-operator/
 │   │   └── kustomization.yaml
 │   ├── samples/
 │   │   ├── dynamicprefix.yaml
-│   │   └── dynamicprefixbinding.yaml
+│   │   └── pools_with_annotations.yaml
 │   └── default/
 │       └── kustomization.yaml
 │
 ├── charts/
 │   └── dynamic-prefix-operator/  # Helm chart
-│       ├── Chart.yaml
-│       ├── values.yaml
-│       └── templates/
 │
 ├── hack/
-│   ├── boilerplate.go.txt
-│   └── tools.go                  # Tool dependencies
+│   └── boilerplate.go.txt
 │
 ├── docs/
-│   ├── IMPLEMENTATION_PLAN.md    # This document
-│   ├── ARCHITECTURE.md
-│   └── user-guide/
 │
-├── Makefile                      # Build automation
-├── Dockerfile                    # Multi-stage container build
+├── Makefile
+├── Dockerfile
 ├── go.mod
-├── go.sum
-├── PROJECT                       # Kubebuilder project file
 └── README.md
 ```
 
+## Binding Model: Annotation-Based (1Password Pattern)
+
+Instead of a separate binding CRD, pools reference the DynamicPrefix via annotations:
+
+```yaml
+apiVersion: cilium.io/v2alpha1
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: ipv6-pool
+  annotations:
+    dynamic-prefix.io/name: home-ipv6       # Which DynamicPrefix
+    dynamic-prefix.io/subnet: loadbalancers # Which subnet
+spec:
+  blocks: []  # Managed by operator
+```
+
+**Why this approach:**
+- Simpler than explicit binding resources
+- Follows established patterns (1Password Operator, external-secrets)
+- Pools are self-documenting
+- No orphaned bindings to clean up
+
+**Controller behavior:**
+1. Watch for pools with `dynamic-prefix.io/name` annotation
+2. Look up the referenced DynamicPrefix
+3. Calculate the subnet CIDR
+4. Update the pool's spec with the current CIDR
+5. Re-reconcile when DynamicPrefix changes
+
 ## Implementation Phases
 
-### Phase 1: Project Scaffolding & Core CRDs (Week 1)
+### Phase 1: Project Scaffolding & Core CRD (Week 1)
 
-**Objective**: Set up the project structure and define the core CRDs.
+**Objective**: Set up the project structure and define the DynamicPrefix CRD.
 
 #### Tasks
 
 1. **Initialize kubebuilder project**
    ```bash
-   kubebuilder init --domain reith.cloud --repo github.com/jr42/dynamic-prefix-operator
+   kubebuilder init --domain dynamic-prefix.io --repo github.com/jr42/dynamic-prefix-operator
    ```
 
-2. **Create CRD scaffolds**
+2. **Create DynamicPrefix CRD**
    ```bash
-   kubebuilder create api --group network --version v1alpha1 --kind DynamicPrefix --resource --controller
-   kubebuilder create api --group network --version v1alpha1 --kind DynamicPrefixBinding --resource --controller
+   kubebuilder create api --group "" --version v1alpha1 --kind DynamicPrefix --resource --controller
    ```
 
-3. **Implement CRD types** (see [CRD Specifications](#crd-specifications) below)
+3. **Implement CRD types** with proper spec/status separation
 
-4. **Add CEL validation rules** for CRDs
+4. **Add CEL validation rules**
 
 5. **Generate manifests**
-   ```bash
-   make manifests
-   ```
+
+#### DynamicPrefix CRD
+
+```go
+// api/v1alpha1/dynamicprefix_types.go
+
+type DynamicPrefixSpec struct {
+    // Acquisition defines how to receive the prefix
+    Acquisition AcquisitionSpec `json:"acquisition"`
+
+    // Subnets defines how to subdivide the received prefix
+    Subnets []SubnetSpec `json:"subnets,omitempty"`
+
+    // Transition defines graceful transition settings
+    Transition TransitionSpec `json:"transition,omitempty"`
+}
+
+type AcquisitionSpec struct {
+    // DHCPv6PD configures DHCPv6 Prefix Delegation
+    DHCPv6PD *DHCPv6PDSpec `json:"dhcpv6pd,omitempty"`
+
+    // RouterAdvertisement configures RA monitoring
+    RouterAdvertisement *RASpec `json:"routerAdvertisement,omitempty"`
+}
+
+type DHCPv6PDSpec struct {
+    // Interface to receive delegated prefix on
+    Interface string `json:"interface"`
+
+    // RequestedPrefixLength hints the desired prefix length
+    RequestedPrefixLength *int `json:"requestedPrefixLength,omitempty"`
+}
+
+type SubnetSpec struct {
+    // Name identifies this subnet
+    Name string `json:"name"`
+
+    // Offset within the received prefix (hex supported)
+    Offset int64 `json:"offset"`
+
+    // PrefixLength of the subnet
+    PrefixLength int `json:"prefixLength"`
+}
+
+type DynamicPrefixStatus struct {
+    // CurrentPrefix is the currently active prefix
+    CurrentPrefix string `json:"currentPrefix,omitempty"`
+
+    // PrefixSource indicates how the prefix was obtained
+    PrefixSource string `json:"prefixSource,omitempty"`
+
+    // LeaseExpiresAt indicates when the DHCPv6 lease expires
+    LeaseExpiresAt *metav1.Time `json:"leaseExpiresAt,omitempty"`
+
+    // Subnets contains calculated subnet CIDRs
+    Subnets []SubnetStatus `json:"subnets,omitempty"`
+
+    // Conditions represent the current state
+    Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+```
 
 #### Deliverables
 - [ ] Compilable project structure
-- [ ] CRD definitions with OpenAPI validation
-- [ ] Basic controller stubs
+- [ ] DynamicPrefix CRD with OpenAPI validation
+- [ ] Basic controller stub
 - [ ] CI pipeline (GitHub Actions)
 
 ### Phase 2: DHCPv6-PD Client (Week 2)
@@ -161,593 +236,223 @@ dynamic-prefix-operator/
 #### Architecture
 
 ```go
-// internal/prefix/acquirer.go
-type Acquirer interface {
-    // Acquire attempts to obtain a prefix
-    Acquire(ctx context.Context) (*Prefix, error)
+// internal/prefix/receiver.go
+type Receiver interface {
+    // Start begins receiving prefixes
+    Start(ctx context.Context) error
 
-    // Watch returns a channel that emits prefix changes
-    Watch(ctx context.Context) (<-chan PrefixEvent, error)
+    // Prefixes returns a channel of prefix events
+    Prefixes() <-chan PrefixEvent
 
-    // Release releases the current prefix
-    Release(ctx context.Context) error
-
-    // CurrentPrefix returns the currently held prefix
+    // CurrentPrefix returns the current prefix if any
     CurrentPrefix() *Prefix
+
+    // Stop stops receiving
+    Stop() error
 }
 
 type Prefix struct {
-    Network      netip.Prefix
-    ValidLifetime   time.Duration
+    Network           netip.Prefix
+    ValidLifetime     time.Duration
     PreferredLifetime time.Duration
-    Source       PrefixSource
-    AcquiredAt   time.Time
+    Source            PrefixSource
+    ReceivedAt        time.Time
 }
-
-type PrefixSource string
-const (
-    PrefixSourceDHCPv6PD PrefixSource = "dhcpv6-pd"
-    PrefixSourceRA       PrefixSource = "router-advertisement"
-    PrefixSourceStatic   PrefixSource = "static"
-)
 ```
 
-#### DHCPv6-PD Client Implementation
+#### DHCPv6-PD Implementation
 
 ```go
 // internal/prefix/dhcpv6/client.go
 type Client struct {
-    interface_  string
-    duid        dhcpv6.DUID
-    requestedLen uint8
-
-    conn        *dhcpv6.Client
+    iface        string
+    prefixLen    uint8
+    conn         net.PacketConn
     currentLease *Lease
-
-    events      chan PrefixEvent
-    mu          sync.RWMutex
+    prefixes     chan PrefixEvent
 }
 
-func (c *Client) Acquire(ctx context.Context) (*Prefix, error) {
-    // 1. Build SOLICIT message with IA_PD option
-    solicit, err := dhcpv6.NewSolicit(c.interface_,
-        dhcpv6.WithIAPD(
-            dhcpv6.GenerateIAID(c.interface_),
-            &dhcpv6.OptIAPrefix{
-                PreferredLifetime: 3600,
-                ValidLifetime:     7200,
-                Prefix: &net.IPNet{
-                    Mask: net.CIDRMask(c.requestedLen, 128),
-                },
-            },
-        ),
-    )
-
-    // 2. Send SOLICIT, receive ADVERTISE
-    advertise, err := c.conn.SendAndRead(ctx, solicit, nil)
-
-    // 3. Build REQUEST based on ADVERTISE
-    request, err := dhcpv6.NewRequestFromAdvertise(advertise)
-
-    // 4. Send REQUEST, receive REPLY
-    reply, err := c.conn.SendAndRead(ctx, request, nil)
-
-    // 5. Extract IA_PD from REPLY
-    iapd := reply.GetOneOption(dhcpv6.OptionIAPD)
-
-    // 6. Store lease and start renewal timer
-    c.storeLease(iapd)
-
-    return c.currentPrefix(), nil
-}
-
-func (c *Client) runLeaseManager(ctx context.Context) {
-    // Handles T1 (renew) and T2 (rebind) timers
-    // Sends RENEW before T1 expires
-    // Sends REBIND if RENEW fails before T2
-    // Emits PrefixExpired event if all renewal fails
+func (c *Client) Start(ctx context.Context) error {
+    // 1. Create DHCPv6 client
+    // 2. Send SOLICIT with IA_PD
+    // 3. Handle ADVERTISE/REPLY
+    // 4. Start lease renewal goroutine
+    // 5. Emit prefix events on changes
 }
 ```
 
 #### Tasks
 
 1. **Implement DHCPv6-PD client** using `insomniacslk/dhcp`
-   - SOLICIT → ADVERTISE → REQUEST → REPLY flow
-   - IA_PD option handling
-   - DUID generation and persistence
-
-2. **Implement lease management**
-   - T1/T2 timer handling
-   - RENEW and REBIND flows
-   - Lease persistence across restarts
-
-3. **Add integration tests**
-   - Mock DHCPv6 server for testing
-   - Test prefix renewal flow
-   - Test rebind on server failure
-
-#### Deliverables
-- [ ] Working DHCPv6-PD client
-- [ ] Lease management with T1/T2 timers
-- [ ] Unit and integration tests
-- [ ] Metrics for lease state
+2. **Implement lease management** (T1/T2 timers, RENEW, REBIND)
+3. **Add integration tests** with mock DHCPv6 server
 
 ### Phase 3: Router Advertisement Monitor (Week 2-3)
 
-**Objective**: Implement RA monitoring as fallback/supplementary prefix detection.
-
-#### Architecture
+**Objective**: Implement RA monitoring as fallback.
 
 ```go
 // internal/prefix/ra/monitor.go
 type Monitor struct {
-    interface_ string
-    conn       *ndp.Conn
-    events     chan PrefixEvent
+    iface    string
+    conn     *ndp.Conn
+    prefixes chan PrefixEvent
 }
 
-func (m *Monitor) Watch(ctx context.Context) (<-chan PrefixEvent, error) {
-    go func() {
-        for {
-            msg, _, _, err := m.conn.ReadFrom()
-            if err != nil {
-                continue
-            }
-
-            ra, ok := msg.(*ndp.RouterAdvertisement)
-            if !ok {
-                continue
-            }
-
-            for _, opt := range ra.Options {
-                if pi, ok := opt.(*ndp.PrefixInformation); ok {
-                    if pi.OnLink && pi.AutonomousAddressConfiguration {
-                        m.events <- PrefixEvent{
-                            Type:   PrefixDetected,
-                            Prefix: pi.Prefix,
-                            ValidLifetime: pi.ValidLifetime,
-                        }
-                    }
-                }
-            }
-        }
-    }()
-
-    return m.events, nil
+func (m *Monitor) Start(ctx context.Context) error {
+    // Listen for RAs, parse PIOs, emit prefix events
 }
 ```
 
-#### Tasks
-
-1. **Implement RA monitor** using `mdlayher/ndp`
-   - Listen for Router Advertisements
-   - Parse Prefix Information options
-   - Track prefix validity
-
-2. **Implement prefix reconciliation**
-   - Compare DHCPv6-PD prefix with RA prefix
-   - Log discrepancies
-   - Fallback to RA if DHCPv6-PD fails
-
-3. **Add tests**
-   - Mock RA packets
-   - Test prefix detection
-
-#### Deliverables
-- [ ] Working RA monitor
-- [ ] Prefix source reconciliation
-- [ ] Tests with mock RAs
-
 ### Phase 4: DynamicPrefix Controller (Week 3)
 
-**Objective**: Implement the main controller that reconciles DynamicPrefix resources.
+**Objective**: Main controller that manages DynamicPrefix resources.
 
 #### Reconciliation Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                   DynamicPrefix Reconciler                       │
-│                                                                 │
-│  1. Fetch DynamicPrefix CR                                      │
-│  2. Ensure Acquirer is running for interface                    │
-│  3. Get current prefix from Acquirer                            │
-│  4. Calculate subnets from prefix                               │
-│  5. Update status.currentPrefix and status.subnets              │
-│  6. If prefix changed:                                          │
-│     a. Add old prefix to history                                │
-│     b. Trigger bindings reconciliation                          │
-│     c. Start drain timer for old prefix                         │
-│  7. Update conditions                                           │
-│  8. Requeue based on lease expiry                               │
-└─────────────────────────────────────────────────────────────────┘
+1. Fetch DynamicPrefix
+2. Ensure prefix receiver is running
+3. Get current prefix
+4. Calculate subnets
+5. Update status
+6. If prefix changed, trigger pool reconciliation
+7. Requeue before lease expires
 ```
 
-#### Controller Implementation
-
 ```go
-// internal/controller/dynamicprefix_controller.go
 func (r *DynamicPrefixReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-    log := log.FromContext(ctx)
-
-    // 1. Fetch the DynamicPrefix
-    var dp networkv1alpha1.DynamicPrefix
+    var dp v1alpha1.DynamicPrefix
     if err := r.Get(ctx, req.NamespacedName, &dp); err != nil {
         return ctrl.Result{}, client.IgnoreNotFound(err)
     }
 
-    // 2. Handle deletion with finalizer
-    if !dp.DeletionTimestamp.IsZero() {
-        return r.handleDeletion(ctx, &dp)
-    }
+    // Get or create receiver
+    receiver, err := r.receiverManager.GetOrCreate(dp.Spec.Acquisition)
 
-    // 3. Ensure finalizer is set
-    if !controllerutil.ContainsFinalizer(&dp, finalizerName) {
-        controllerutil.AddFinalizer(&dp, finalizerName)
-        if err := r.Update(ctx, &dp); err != nil {
-            return ctrl.Result{}, err
-        }
-    }
+    // Get current prefix
+    prefix := receiver.CurrentPrefix()
 
-    // 4. Get or create acquirer for this interface
-    acquirer, err := r.acquirerManager.GetOrCreate(dp.Spec.Acquisition)
-    if err != nil {
-        return r.setCondition(ctx, &dp, ConditionPrefixAcquired, false, err.Error())
-    }
+    // Calculate subnets
+    subnets := calculateSubnets(prefix.Network, dp.Spec.Subnets)
 
-    // 5. Get current prefix
-    prefix := acquirer.CurrentPrefix()
-    if prefix == nil {
-        // Attempt acquisition
-        prefix, err = acquirer.Acquire(ctx)
-        if err != nil {
-            return r.setCondition(ctx, &dp, ConditionPrefixAcquired, false, err.Error())
-        }
-    }
-
-    // 6. Calculate subnets
-    subnets, err := r.calculateSubnets(prefix.Network, dp.Spec.Subnets)
-    if err != nil {
-        return ctrl.Result{}, err
-    }
-
-    // 7. Check if prefix changed
-    if dp.Status.CurrentPrefix != prefix.Network.String() {
-        r.handlePrefixChange(ctx, &dp, prefix)
-    }
-
-    // 8. Update status
+    // Update status
     dp.Status.CurrentPrefix = prefix.Network.String()
     dp.Status.Subnets = subnets
-    dp.Status.LeaseExpiresAt = &metav1.Time{Time: prefix.AcquiredAt.Add(prefix.ValidLifetime)}
 
-    if err := r.Status().Update(ctx, &dp); err != nil {
-        return ctrl.Result{}, err
+    // If prefix changed, find and update referencing pools
+    if prefixChanged {
+        r.reconcileReferencingPools(ctx, &dp)
     }
 
-    // 9. Requeue before lease expires
-    requeueAfter := time.Until(prefix.AcquiredAt.Add(prefix.ValidLifetime / 2))
-    return ctrl.Result{RequeueAfter: requeueAfter}, nil
+    return ctrl.Result{RequeueAfter: renewBefore}, nil
 }
 ```
 
-#### Tasks
+### Phase 5: Pool Controller (Week 4)
 
-1. **Implement DynamicPrefix controller**
-   - Reconciliation loop
-   - Acquirer lifecycle management
-   - Subnet calculation
+**Objective**: Watch for annotated pools and keep them in sync.
 
-2. **Implement prefix change handling**
-   - Detect prefix changes
-   - Update history
-   - Emit events
-
-3. **Add finalizer for cleanup**
-   - Release DHCPv6 lease on deletion
-   - Clean up acquirer resources
-
-4. **Add controller tests**
-   - envtest-based tests
-   - Test reconciliation flow
-   - Test error handling
-
-#### Deliverables
-- [ ] Working DynamicPrefix controller
-- [ ] Prefix change detection
-- [ ] Finalizer cleanup
-- [ ] Controller tests
-
-### Phase 5: Cilium Backend (Week 4)
-
-**Objective**: Implement the Cilium backend for updating LB-IPAM pools and CIDRGroups.
-
-#### Backend Interface
+#### Controller Design
 
 ```go
-// internal/backend/interface.go
-type Backend interface {
-    // Name returns the backend identifier
-    Name() string
-
-    // Supports checks if this backend can handle the target
-    Supports(target TargetRef) bool
-
-    // Update applies the new prefix to the target
-    Update(ctx context.Context, target TargetRef, prefix netip.Prefix, strategy UpdateStrategy) error
-
-    // Validate checks if the target exists and is accessible
-    Validate(ctx context.Context, target TargetRef) error
+// internal/controller/pool_controller.go
+type PoolReconciler struct {
+    client.Client
+    poolHandlers map[string]PoolHandler
 }
 
-type UpdateStrategy string
-const (
-    UpdateStrategyReplace UpdateStrategy = "Replace"
-    UpdateStrategyAppend  UpdateStrategy = "Append"
-)
+func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+    // 1. Fetch the pool (could be any supported type)
+    // 2. Check for dynamic-prefix.io/name annotation
+    // 3. Look up the referenced DynamicPrefix
+    // 4. Get the subnet CIDR from status
+    // 5. Update the pool's CIDR
+}
+
+// Watch multiple pool types
+func (r *PoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
+    return ctrl.NewControllerManagedBy(mgr).
+        For(&ciliumv2alpha1.CiliumLoadBalancerIPPool{}).
+        Watches(&ciliumv2.CiliumCIDRGroup{}, handler.EnqueueRequestsFromMapFunc(r.findPoolsForCIDRGroup)).
+        Watches(&v1alpha1.DynamicPrefix{}, handler.EnqueueRequestsFromMapFunc(r.findPoolsForPrefix)).
+        Complete(r)
+}
 ```
 
-#### Cilium LB-IPAM Implementation
+#### Pool Handlers
 
 ```go
-// internal/backend/cilium/lbipam.go
-type LBIPAMBackend struct {
-    client client.Client
+// internal/pool/manager.go
+type PoolHandler interface {
+    // GetAnnotations extracts dynamic-prefix annotations
+    GetAnnotations(obj client.Object) (prefixName, subnetName string, ok bool)
+
+    // UpdateCIDR updates the pool with the new CIDR
+    UpdateCIDR(ctx context.Context, obj client.Object, cidr netip.Prefix) error
 }
 
-func (b *LBIPAMBackend) Update(ctx context.Context, target TargetRef, prefix netip.Prefix, strategy UpdateStrategy) error {
-    var pool ciliumv2alpha1.CiliumLoadBalancerIPPool
-    if err := b.client.Get(ctx, client.ObjectKey{
-        Name:      target.Name,
-        Namespace: target.Namespace,
-    }, &pool); err != nil {
-        return err
-    }
+// internal/pool/cilium/lbipam.go
+type LBIPAMHandler struct{}
 
-    switch strategy {
-    case UpdateStrategyReplace:
-        pool.Spec.Blocks = []ciliumv2alpha1.CiliumLoadBalancerIPPoolIPBlock{
-            {Cidr: ciliumv2alpha1.IPv6CIDR(prefix.String())},
-        }
-    case UpdateStrategyAppend:
-        pool.Spec.Blocks = append(pool.Spec.Blocks,
-            ciliumv2alpha1.CiliumLoadBalancerIPPoolIPBlock{
-                Cidr: ciliumv2alpha1.IPv6CIDR(prefix.String()),
-            },
-        )
+func (h *LBIPAMHandler) UpdateCIDR(ctx context.Context, obj client.Object, cidr netip.Prefix) error {
+    pool := obj.(*ciliumv2alpha1.CiliumLoadBalancerIPPool)
+    pool.Spec.Blocks = []ciliumv2alpha1.CiliumLoadBalancerIPPoolIPBlock{
+        {Cidr: ciliumv2alpha1.IPv6CIDR(cidr.String())},
     }
-
-    return b.client.Update(ctx, &pool)
+    return nil
 }
 ```
-
-#### Cilium CIDRGroup Implementation
-
-```go
-// internal/backend/cilium/cidrgroup.go
-type CIDRGroupBackend struct {
-    client client.Client
-}
-
-func (b *CIDRGroupBackend) Update(ctx context.Context, target TargetRef, prefix netip.Prefix, strategy UpdateStrategy) error {
-    var group ciliumv2.CiliumCIDRGroup
-    if err := b.client.Get(ctx, client.ObjectKey{Name: target.Name}, &group); err != nil {
-        return err
-    }
-
-    switch strategy {
-    case UpdateStrategyReplace:
-        group.Spec.ExternalCIDRs = []ciliumv2.ExternalCIDR{
-            ciliumv2.ExternalCIDR(prefix.String()),
-        }
-    case UpdateStrategyAppend:
-        group.Spec.ExternalCIDRs = append(group.Spec.ExternalCIDRs,
-            ciliumv2.ExternalCIDR(prefix.String()),
-        )
-    }
-
-    return b.client.Update(ctx, &group)
-}
-```
-
-#### Tasks
-
-1. **Implement Cilium LB-IPAM backend**
-   - Update CiliumLoadBalancerIPPool
-   - Handle Replace and Append strategies
-   - Validate pool existence
-
-2. **Implement Cilium CIDRGroup backend**
-   - Update CiliumCIDRGroup
-   - Handle external CIDR updates
-
-3. **Implement DynamicPrefixBinding controller**
-   - Watch DynamicPrefix changes
-   - Trigger backend updates
-   - Update binding status
-
-4. **Add integration tests**
-   - Test with Cilium CRDs
-   - Test update strategies
-
-#### Deliverables
-- [ ] Working Cilium LB-IPAM backend
-- [ ] Working Cilium CIDRGroup backend
-- [ ] DynamicPrefixBinding controller
-- [ ] Integration tests
 
 ### Phase 6: Graceful Transitions (Week 5)
 
-**Objective**: Implement graceful prefix transition to minimize service disruption.
-
-#### Transition Flow
-
-```
-Prefix Change Detected
-        │
-        ▼
-┌─────────────────────────────────────┐
-│ Add new prefix to pools (Append)    │
-│ Keep old prefix active              │
-└─────────────────────────────────────┘
-        │
-        ▼
-┌─────────────────────────────────────┐
-│ Wait for DNS propagation            │
-│ (configurable drain period)         │
-└─────────────────────────────────────┘
-        │
-        ▼
-┌─────────────────────────────────────┐
-│ Remove old prefix from pools        │
-│ Update history                      │
-└─────────────────────────────────────┘
-```
-
-#### Implementation
+**Objective**: Handle prefix changes without disruption.
 
 ```go
 // internal/transition/manager.go
 type Manager struct {
-    client         client.Client
-    drainPeriod    time.Duration
-    maxHistory     int
-    pendingDrains  map[string]*DrainTask
-    mu             sync.Mutex
+    drainPeriod time.Duration
+    pending     map[string]*Transition
 }
 
-type DrainTask struct {
-    OldPrefix    netip.Prefix
-    NewPrefix    netip.Prefix
-    StartedAt    time.Time
-    DrainUntil   time.Time
-    Bindings     []client.ObjectKey
-    Status       DrainStatus
+type Transition struct {
+    OldPrefix  netip.Prefix
+    NewPrefix  netip.Prefix
+    StartedAt  time.Time
+    DrainUntil time.Time
 }
 
-func (m *Manager) StartTransition(ctx context.Context, dp *networkv1alpha1.DynamicPrefix, oldPrefix, newPrefix netip.Prefix) error {
-    m.mu.Lock()
-    defer m.mu.Unlock()
-
-    // 1. Get all bindings for this DynamicPrefix
-    bindings, err := m.getBindings(ctx, dp)
-    if err != nil {
-        return err
-    }
-
-    // 2. For each binding, add new prefix (Append strategy)
-    for _, binding := range bindings {
-        backend := m.backendManager.Get(binding.Spec.Target.Kind)
-        if err := backend.Update(ctx, binding.Spec.Target, newPrefix, UpdateStrategyAppend); err != nil {
-            return err
-        }
-    }
-
-    // 3. Schedule drain task
-    task := &DrainTask{
-        OldPrefix:  oldPrefix,
-        NewPrefix:  newPrefix,
-        StartedAt:  time.Now(),
-        DrainUntil: time.Now().Add(m.drainPeriod),
-        Bindings:   bindingKeys,
-        Status:     DrainStatusPending,
-    }
-    m.pendingDrains[dp.Name] = task
-
-    // 4. Schedule drain completion
-    go m.completeDrain(ctx, dp.Name, task)
-
-    return nil
-}
-
-func (m *Manager) completeDrain(ctx context.Context, dpName string, task *DrainTask) {
-    timer := time.NewTimer(time.Until(task.DrainUntil))
-    defer timer.Stop()
-
-    select {
-    case <-timer.C:
-        // Drain period elapsed, remove old prefix
-        for _, bindingKey := range task.Bindings {
-            // Remove old prefix from pool
-        }
-    case <-ctx.Done():
-        return
-    }
+func (m *Manager) StartTransition(old, new netip.Prefix) {
+    // 1. Keep old prefix in pools (add new, don't remove old yet)
+    // 2. Start drain timer
+    // 3. After drain period, remove old prefix
 }
 ```
 
-#### Tasks
-
-1. **Implement transition manager**
-   - Track pending transitions
-   - Manage drain timers
-   - Handle concurrent transitions
-
-2. **Implement drain completion**
-   - Remove old prefix after drain period
-   - Update DynamicPrefix history
-   - Emit completion events
-
-3. **Add cancelation support**
-   - Cancel drain if new prefix arrives during drain
-   - Handle rapid prefix changes
-
-4. **Add tests**
-   - Test transition flow
-   - Test cancelation
-   - Test concurrent transitions
-
-#### Deliverables
-- [ ] Working transition manager
-- [ ] Drain period support
-- [ ] Transition cancelation
-- [ ] Tests
-
-### Phase 7: Observability & Production Hardening (Week 6)
-
-**Objective**: Add metrics, events, and production-grade error handling.
+### Phase 7: Observability (Week 6)
 
 #### Metrics
 
 ```go
-// Metrics to expose
 var (
-    prefixAcquisitions = prometheus.NewCounterVec(
+    prefixReceived = prometheus.NewCounterVec(
         prometheus.CounterOpts{
-            Name: "dynamic_prefix_acquisitions_total",
-            Help: "Total number of prefix acquisitions",
+            Name: "dynamic_prefix_received_total",
+            Help: "Total prefixes received",
         },
-        []string{"interface", "source", "status"},
+        []string{"name", "source"},
     )
 
     prefixChanges = prometheus.NewCounterVec(
         prometheus.CounterOpts{
             Name: "dynamic_prefix_changes_total",
-            Help: "Total number of prefix changes detected",
         },
         []string{"name"},
     )
 
-    leaseExpirySeconds = prometheus.NewGaugeVec(
+    leaseExpiry = prometheus.NewGaugeVec(
         prometheus.GaugeOpts{
             Name: "dynamic_prefix_lease_expiry_seconds",
-            Help: "Seconds until current lease expires",
-        },
-        []string{"name"},
-    )
-
-    bindingSyncDuration = prometheus.NewHistogramVec(
-        prometheus.HistogramOpts{
-            Name:    "dynamic_prefix_binding_sync_duration_seconds",
-            Help:    "Duration of binding sync operations",
-            Buckets: prometheus.DefBuckets,
-        },
-        []string{"binding", "backend"},
-    )
-
-    drainPeriodRemaining = prometheus.NewGaugeVec(
-        prometheus.GaugeOpts{
-            Name: "dynamic_prefix_drain_period_remaining_seconds",
-            Help: "Seconds remaining in current drain period",
         },
         []string{"name"},
     )
@@ -756,120 +461,34 @@ var (
 
 #### Events
 
-```go
-// Events to emit
-const (
-    EventPrefixAcquired     = "PrefixAcquired"
-    EventPrefixChanged      = "PrefixChanged"
-    EventPrefixRenewed      = "PrefixRenewed"
-    EventPrefixExpired      = "PrefixExpired"
-    EventBindingSynced      = "BindingSynced"
-    EventBindingSyncFailed  = "BindingSyncFailed"
-    EventDrainStarted       = "DrainStarted"
-    EventDrainCompleted     = "DrainCompleted"
-)
-```
-
-#### Tasks
-
-1. **Add Prometheus metrics**
-   - Prefix acquisition counters
-   - Lease expiry gauges
-   - Sync duration histograms
-
-2. **Add Kubernetes events**
-   - Emit events for all major state changes
-   - Include relevant details in event messages
-
-3. **Add health endpoints**
-   - /healthz for liveness
-   - /readyz for readiness
-   - Leader election health
-
-4. **Production hardening**
-   - Rate limiting on API calls
-   - Exponential backoff on failures
-   - Circuit breakers for external dependencies
-
-5. **Documentation**
-   - Runbook for common issues
-   - Metrics reference
-   - Troubleshooting guide
-
-#### Deliverables
-- [ ] Prometheus metrics
-- [ ] Kubernetes events
-- [ ] Health endpoints
-- [ ] Runbooks and documentation
+- `PrefixReceived` - New prefix obtained
+- `PrefixChanged` - Prefix changed
+- `PoolUpdated` - Pool CIDR updated
+- `TransitionStarted` / `TransitionCompleted`
 
 ### Phase 8: Deployment & Release (Week 7)
 
-**Objective**: Create deployment artifacts and release automation.
+- Helm chart
+- Kustomize configurations
+- GitHub Actions for releases
+- Container image publishing
 
-#### Deployment Methods
-
-1. **Helm Chart**
-   - Configurable values
-   - RBAC resources
-   - ServiceMonitor for Prometheus
-
-2. **Kustomize Bases**
-   - Default configuration
-   - HA configuration
-   - Development configuration
-
-3. **Plain YAML**
-   - Single-file installation
-   - Minimal dependencies
-
-#### Tasks
-
-1. **Create Helm chart**
-   - Chart.yaml, values.yaml
-   - Templates for all resources
-   - Configurable resource limits
-
-2. **Create Kustomize configurations**
-   - Base configuration
-   - Overlays for environments
-
-3. **Create release automation**
-   - GitHub Actions workflow
-   - Semantic versioning
-   - Container image publishing
-   - Helm chart publishing
-
-4. **Create installation documentation**
-   - Quick start guide
-   - Configuration reference
-   - Upgrade procedures
-
-#### Deliverables
-- [ ] Helm chart
-- [ ] Kustomize configurations
-- [ ] Release automation
-- [ ] Installation documentation
-
-## CRD Specifications
-
-### DynamicPrefix
+## CRD Specification
 
 ```yaml
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: dynamicprefixes.network.reith.cloud
+  name: dynamicprefixes.dynamic-prefix.io
 spec:
-  group: network.reith.cloud
+  group: dynamic-prefix.io
   names:
     kind: DynamicPrefix
     listKind: DynamicPrefixList
     plural: dynamicprefixes
     singular: dynamicprefix
-    shortNames:
-      - dp
-      - dprefix
-  scope: Cluster  # Cluster-scoped, prefixes are global
+    shortNames: [dp, dprefix]
+  scope: Cluster
   versions:
     - name: v1alpha1
       served: true
@@ -883,9 +502,6 @@ spec:
         - name: Source
           type: string
           jsonPath: .status.prefixSource
-        - name: Expires
-          type: date
-          jsonPath: .status.leaseExpiresAt
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -895,72 +511,51 @@ spec:
           properties:
             spec:
               type: object
-              required:
-                - acquisition
+              required: [acquisition]
               properties:
                 acquisition:
                   type: object
                   properties:
-                    dhcpv6:
+                    dhcpv6pd:
                       type: object
-                      required:
-                        - interface
+                      required: [interface]
                       properties:
                         interface:
                           type: string
-                          description: Network interface for DHCPv6-PD
                         requestedPrefixLength:
                           type: integer
                           minimum: 48
                           maximum: 64
-                          default: 60
-                          description: Requested prefix length
-                        duid:
-                          type: string
-                          default: auto
-                          description: DUID for DHCPv6 identification
                     routerAdvertisement:
                       type: object
                       properties:
                         interface:
                           type: string
-                          description: Interface to monitor for RAs
                         enabled:
                           type: boolean
-                          default: true
                 subnets:
                   type: array
                   items:
                     type: object
-                    required:
-                      - name
-                      - prefixLength
+                    required: [name, prefixLength]
                     properties:
                       name:
                         type: string
-                        description: Subnet identifier
                       offset:
                         type: integer
-                        default: 0
-                        description: Offset within acquired prefix
                       prefixLength:
                         type: integer
-                        minimum: 64
+                        minimum: 48
                         maximum: 128
-                        description: Subnet prefix length
                 transition:
                   type: object
                   properties:
                     drainPeriodMinutes:
                       type: integer
                       default: 60
-                      minimum: 0
-                      maximum: 1440
                     maxPrefixHistory:
                       type: integer
                       default: 2
-                      minimum: 1
-                      maximum: 10
             status:
               type: object
               properties:
@@ -968,10 +563,6 @@ spec:
                   type: string
                 prefixSource:
                   type: string
-                  enum:
-                    - dhcpv6-pd
-                    - router-advertisement
-                    - static
                 leaseExpiresAt:
                   type: string
                   format: date-time
@@ -984,25 +575,6 @@ spec:
                         type: string
                       cidr:
                         type: string
-                history:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      prefix:
-                        type: string
-                      acquiredAt:
-                        type: string
-                        format: date-time
-                      deprecatedAt:
-                        type: string
-                        format: date-time
-                      state:
-                        type: string
-                        enum:
-                          - active
-                          - draining
-                          - expired
                 conditions:
                   type: array
                   items:
@@ -1012,10 +584,6 @@ spec:
                         type: string
                       status:
                         type: string
-                        enum:
-                          - "True"
-                          - "False"
-                          - Unknown
                       lastTransitionTime:
                         type: string
                         format: date-time
@@ -1025,131 +593,7 @@ spec:
                         type: string
 ```
 
-### DynamicPrefixBinding
-
-```yaml
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  name: dynamicprefixbindings.network.reith.cloud
-spec:
-  group: network.reith.cloud
-  names:
-    kind: DynamicPrefixBinding
-    listKind: DynamicPrefixBindingList
-    plural: dynamicprefixbindings
-    singular: dynamicprefixbinding
-    shortNames:
-      - dpb
-      - dpbinding
-  scope: Cluster
-  versions:
-    - name: v1alpha1
-      served: true
-      storage: true
-      subresources:
-        status: {}
-      additionalPrinterColumns:
-        - name: Prefix
-          type: string
-          jsonPath: .status.boundPrefix
-        - name: Target
-          type: string
-          jsonPath: .spec.target.kind
-        - name: Synced
-          type: boolean
-          jsonPath: .status.targetSynced
-        - name: Age
-          type: date
-          jsonPath: .metadata.creationTimestamp
-      schema:
-        openAPIV3Schema:
-          type: object
-          properties:
-            spec:
-              type: object
-              required:
-                - prefixRef
-                - target
-              properties:
-                prefixRef:
-                  type: object
-                  required:
-                    - name
-                  properties:
-                    name:
-                      type: string
-                      description: Name of the DynamicPrefix
-                    subnet:
-                      type: string
-                      description: Subnet name from DynamicPrefix
-                target:
-                  type: object
-                  required:
-                    - kind
-                    - name
-                  properties:
-                    kind:
-                      type: string
-                      enum:
-                        - CiliumLoadBalancerIPPool
-                        - CiliumCIDRGroup
-                        - IPPool  # Future: Calico
-                        - IPAddressPool  # Future: MetalLB
-                    name:
-                      type: string
-                    namespace:
-                      type: string
-                updateStrategy:
-                  type: object
-                  properties:
-                    type:
-                      type: string
-                      enum:
-                        - Replace
-                        - Append
-                      default: Replace
-            status:
-              type: object
-              properties:
-                boundPrefix:
-                  type: string
-                targetSynced:
-                  type: boolean
-                lastSyncTime:
-                  type: string
-                  format: date-time
-                lastSyncError:
-                  type: string
-```
-
-## Testing Strategy
-
-### Unit Tests
-- Individual function testing
-- Mock interfaces for dependencies
-- Table-driven tests
-
-### Integration Tests
-- envtest for Kubernetes API testing
-- Mock DHCPv6 server
-- Mock RA sender
-- Cilium CRD fixtures
-
-### End-to-End Tests
-- Kind cluster with Cilium
-- Real DHCPv6-PD (containerized)
-- Prefix change simulation
-- Full reconciliation flow
-
-### Performance Tests
-- Reconciliation latency
-- Memory usage under load
-- Lease renewal timing accuracy
-
-## Security Considerations
-
-### RBAC
+## RBAC
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -1158,14 +602,14 @@ metadata:
   name: dynamic-prefix-operator
 rules:
   # Own CRDs
-  - apiGroups: ["network.reith.cloud"]
-    resources: ["dynamicprefixes", "dynamicprefixbindings"]
+  - apiGroups: ["dynamic-prefix.io"]
+    resources: ["dynamicprefixes"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["network.reith.cloud"]
-    resources: ["dynamicprefixes/status", "dynamicprefixbindings/status"]
+  - apiGroups: ["dynamic-prefix.io"]
+    resources: ["dynamicprefixes/status"]
     verbs: ["get", "update", "patch"]
 
-  # Cilium resources
+  # Cilium resources (update annotated pools)
   - apiGroups: ["cilium.io"]
     resources: ["ciliumloadbalancerippools", "ciliumcidrgroups"]
     verbs: ["get", "list", "watch", "update", "patch"]
@@ -1181,62 +625,18 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ```
 
-### Network Capabilities
+## Security
 
-The operator requires:
-- `CAP_NET_RAW` for DHCPv6 and NDP raw sockets
-- Host network access for interface binding
-- Typically runs as a DaemonSet on nodes with the monitored interface
-
-### Security Best Practices
-
-- Non-root user where possible
-- Read-only root filesystem
-- No privileged containers
+- Requires `CAP_NET_RAW` for DHCPv6/NDP sockets
+- Host network for interface binding
+- Non-root where possible
 - Minimal RBAC permissions
-- Secret management for credentials (if any)
-
-## Risk Assessment
-
-| Risk | Likelihood | Impact | Mitigation |
-|------|------------|--------|------------|
-| DHCPv6-PD lease loss | Medium | High | RA fallback, aggressive renewal |
-| Rapid prefix changes | Low | Medium | Transition queue, debouncing |
-| Backend API rate limiting | Low | Low | Exponential backoff, caching |
-| Cilium API changes | Medium | Medium | Pin Cilium versions, abstraction layer |
-| Memory leak in watchers | Low | Medium | Resource limits, monitoring |
-
-## Success Criteria
-
-1. **Functional**
-   - Successfully acquire prefix via DHCPv6-PD
-   - Detect prefix changes within 60 seconds
-   - Update Cilium pools without manual intervention
-   - Graceful transitions with configurable drain period
-
-2. **Performance**
-   - Reconciliation latency < 5 seconds
-   - Memory usage < 128Mi under normal operation
-   - CPU usage < 100m cores
-
-3. **Reliability**
-   - Zero prefix loss due to operator bugs
-   - Automatic recovery from transient failures
-   - Leader election for HA deployment
-
-4. **Observability**
-   - All major events surfaced as Kubernetes events
-   - Prometheus metrics for dashboards
-   - Structured logs for debugging
 
 ## References
 
-- [Kubebuilder Book - Good Practices](https://kubebuilder.io/reference/good-practices)
-- [Controller Runtime Documentation](https://pkg.go.dev/sigs.k8s.io/controller-runtime)
-- [insomniacslk/dhcp - DHCPv6 Library](https://github.com/insomniacslk/dhcp)
-- [mdlayher/ndp - NDP Library](https://github.com/mdlayher/ndp)
-- [Cilium LB-IPAM Documentation](https://docs.cilium.io/en/stable/network/lb-ipam/)
-- [RFC 3633 - IPv6 Prefix Options for DHCPv6](https://datatracker.ietf.org/doc/html/rfc3633)
-- [RFC 4861 - Neighbor Discovery for IPv6](https://datatracker.ietf.org/doc/html/rfc4861)
-- [k6u - Similar Project (Rust)](https://github.com/0xC0ncord/k6u)
-- [Kubernetes Operators in 2025](https://outerbyte.com/kubernetes-operators-2025-guide/)
+- [Kubebuilder](https://kubebuilder.io/)
+- [controller-runtime](https://pkg.go.dev/sigs.k8s.io/controller-runtime)
+- [insomniacslk/dhcp](https://github.com/insomniacslk/dhcp)
+- [mdlayher/ndp](https://github.com/mdlayher/ndp)
+- [1Password Operator](https://github.com/1Password/onepassword-operator) - Binding pattern inspiration
+- [Cilium LB-IPAM](https://docs.cilium.io/en/stable/network/lb-ipam/)

@@ -1,36 +1,32 @@
-# Example: Deutsche Telekom Home Connection
-# This example shows a typical German residential IPv6 setup where
-# the ISP provides a /56 prefix that changes periodically.
+# Example: Home/SOHO IPv6 Setup
+# The operator receives a delegated prefix from your upstream router
+# and keeps Kubernetes resources in sync when it changes.
 ---
-apiVersion: network.reith.cloud/v1alpha1
+apiVersion: dynamic-prefix.io/v1alpha1
 kind: DynamicPrefix
 metadata:
-  name: deutsche-telekom-ipv6
+  name: home-ipv6
 spec:
-  # How to acquire the prefix
+  # How to receive the delegated prefix
   acquisition:
-    # Primary: DHCPv6 Prefix Delegation
-    # The operator acts as a DHCPv6 client to request a prefix from the ISP
-    dhcpv6:
-      # Network interface connected to the ISP (often a VLAN)
-      interface: enp1s0.222
+    # Primary: Receive via DHCPv6 Prefix Delegation
+    # The operator acts as a DHCPv6-PD client on this interface
+    dhcpv6pd:
+      # Interface connected to upstream router that delegates prefixes
+      interface: eth0
 
-      # Request a /60 from the ISP's /56
-      # This gives us 16 /64 subnets to work with
+      # Hint for requested prefix length (optional)
+      # If your ISP gives you a /56, you might request a /60 for this use
       requestedPrefixLength: 60
 
-      # DUID (DHCP Unique Identifier) for consistent identity
-      # "auto" generates based on hardware, or specify explicitly
-      duid: auto
-
-    # Fallback: Router Advertisement monitoring
+    # Fallback: Monitor Router Advertisements
     # Used when DHCPv6-PD isn't available or for validation
     routerAdvertisement:
-      interface: enp1s0.222
+      interface: eth0
       enabled: true
 
-  # Subnet allocation from the acquired prefix
-  # Example: If we get 2001:db8:1234:ab00::/60
+  # Subnet allocation from the received prefix
+  # Example: If we receive 2001:db8:1234:ab00::/60
   subnets:
     # LoadBalancer IPs for external services
     # 2001:db8:1234:ab00::1000/120 = 256 addresses
@@ -38,22 +34,20 @@ spec:
       offset: 0x1000
       prefixLength: 120
 
-    # Service ClusterIPs (if using IPv6 for cluster)
+    # DMZ services
     # 2001:db8:1234:ab00::2000/112 = 65536 addresses
-    - name: services
+    - name: dmz
       offset: 0x2000
       prefixLength: 112
 
-    # Pod network (if assigning global IPv6 to pods)
-    # 2001:db8:1234:ab01::/64 = entire /64 subnet
-    - name: pods
-      offset: 0x10000  # Next /64 in our /60
-      prefixLength: 64
+    # Network policy matching (entire received prefix)
+    - name: all
+      offset: 0
+      prefixLength: 60  # Same as received prefix
 
   # Graceful transition settings
-  # When the ISP changes our prefix, don't immediately break things
   transition:
-    # Keep old prefix active for 60 minutes
+    # Keep old prefix active for 60 minutes during transitions
     # This allows:
     # - DNS TTLs to expire (typically 300s)
     # - Active connections to complete
@@ -64,11 +58,11 @@ spec:
     maxPrefixHistory: 2
 
 ---
-# Simpler example for testing or static prefix
-apiVersion: network.reith.cloud/v1alpha1
+# Simpler example for testing or RA-only networks
+apiVersion: dynamic-prefix.io/v1alpha1
 kind: DynamicPrefix
 metadata:
-  name: test-static-prefix
+  name: simple-ipv6
 spec:
   acquisition:
     # Only use RA monitoring (no DHCPv6-PD)
@@ -84,3 +78,21 @@ spec:
   transition:
     drainPeriodMinutes: 5
     maxPrefixHistory: 1
+
+---
+# Example: VLAN interface
+apiVersion: dynamic-prefix.io/v1alpha1
+kind: DynamicPrefix
+metadata:
+  name: vlan222-ipv6
+spec:
+  acquisition:
+    dhcpv6pd:
+      # VLAN interface for DMZ network
+      interface: enp1s0.222
+      requestedPrefixLength: 64
+
+  subnets:
+    - name: services
+      offset: 0x100
+      prefixLength: 120
