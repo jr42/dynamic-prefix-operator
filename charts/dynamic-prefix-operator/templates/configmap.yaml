@@ -1,0 +1,99 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dynamic-prefix-operator.fullname" . }}-config
+  labels:
+    {{- include "dynamic-prefix-operator.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    # Operator configuration
+    logLevel: {{ .Values.config.logLevel }}
+
+    # Leader election
+    leaderElection:
+      enabled: {{ .Values.config.leaderElection.enabled }}
+      leaseDuration: {{ .Values.config.leaderElection.leaseDuration }}
+      renewDeadline: {{ .Values.config.leaderElection.renewDeadline }}
+      retryPeriod: {{ .Values.config.leaderElection.retryPeriod }}
+
+    # Metrics
+    metrics:
+      enabled: {{ .Values.config.metrics.enabled }}
+      bindAddress: {{ .Values.config.metrics.bindAddress | quote }}
+
+    # Health probes
+    health:
+      bindAddress: {{ .Values.config.health.bindAddress | quote }}
+
+    # Watch configuration
+    watch:
+      # Namespaces to watch (empty = all namespaces)
+      namespaces:
+        {{- if .Values.watch.namespaces }}
+        {{- toYaml .Values.watch.namespaces | nindent 8 }}
+        {{- else }}
+        []
+        {{- end }}
+
+      # CiliumLoadBalancerIPPool watch settings
+      ciliumLoadBalancerIPPool:
+        enabled: {{ .Values.watch.ciliumLoadBalancerIPPool.enabled }}
+        {{- if .Values.watch.ciliumLoadBalancerIPPool.labelSelector }}
+        labelSelector:
+          {{- toYaml .Values.watch.ciliumLoadBalancerIPPool.labelSelector | nindent 10 }}
+        {{- end }}
+        {{- if .Values.watch.ciliumLoadBalancerIPPool.annotationSelector }}
+        annotationSelector:
+          {{- toYaml .Values.watch.ciliumLoadBalancerIPPool.annotationSelector | nindent 10 }}
+        {{- end }}
+
+      # CiliumCIDRGroup watch settings
+      ciliumCIDRGroup:
+        enabled: {{ .Values.watch.ciliumCIDRGroup.enabled }}
+        {{- if .Values.watch.ciliumCIDRGroup.labelSelector }}
+        labelSelector:
+          {{- toYaml .Values.watch.ciliumCIDRGroup.labelSelector | nindent 10 }}
+        {{- end }}
+        {{- if .Values.watch.ciliumCIDRGroup.annotationSelector }}
+        annotationSelector:
+          {{- toYaml .Values.watch.ciliumCIDRGroup.annotationSelector | nindent 10 }}
+        {{- end }}
+
+      # Ingress watch settings
+      ingress:
+        enabled: {{ .Values.watch.ingress.enabled }}
+        {{- if .Values.watch.ingress.ingressClassName }}
+        ingressClassName: {{ .Values.watch.ingress.ingressClassName | quote }}
+        {{- end }}
+        {{- if .Values.watch.ingress.labelSelector }}
+        labelSelector:
+          {{- toYaml .Values.watch.ingress.labelSelector | nindent 10 }}
+        {{- end }}
+        {{- if .Values.watch.ingress.annotationSelector }}
+        annotationSelector:
+          {{- toYaml .Values.watch.ingress.annotationSelector | nindent 10 }}
+        {{- end }}
+
+      # Service watch settings
+      service:
+        enabled: {{ .Values.watch.service.enabled }}
+        {{- if .Values.watch.service.types }}
+        types:
+          {{- toYaml .Values.watch.service.types | nindent 10 }}
+        {{- end }}
+        {{- if .Values.watch.service.labelSelector }}
+        labelSelector:
+          {{- toYaml .Values.watch.service.labelSelector | nindent 10 }}
+        {{- end }}
+        {{- if .Values.watch.service.annotationSelector }}
+        annotationSelector:
+          {{- toYaml .Values.watch.service.annotationSelector | nindent 10 }}
+        {{- end }}
+
+    # DynamicPrefix default settings
+    dynamicPrefix:
+      transition:
+        drainPeriodMinutes: {{ .Values.dynamicPrefix.transition.drainPeriodMinutes }}
+        maxPrefixHistory: {{ .Values.dynamicPrefix.transition.maxPrefixHistory }}
+      dhcpv6pd:
+        requestedPrefixLength: {{ .Values.dynamicPrefix.dhcpv6pd.requestedPrefixLength }}

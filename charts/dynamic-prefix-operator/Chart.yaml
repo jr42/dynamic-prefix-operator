@@ -1,0 +1,31 @@
+apiVersion: v2
+name: dynamic-prefix-operator
+description: |
+  A Kubernetes operator for managing dynamic IPv6 prefix delegation.
+  Automatically updates Cilium LoadBalancerIPPools, CIDRGroups, and other
+  resources when your ISP-delegated IPv6 prefix changes.
+
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+keywords:
+  - kubernetes
+  - operator
+  - ipv6
+  - dhcpv6
+  - prefix-delegation
+  - cilium
+  - networking
+
+home: https://github.com/jr42/dynamic-prefix-operator
+sources:
+  - https://github.com/jr42/dynamic-prefix-operator
+
+maintainers:
+  - name: jr42
+    url: https://github.com/jr42
+
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/category: networking

@@ -1,0 +1,88 @@
+Thank you for installing {{ .Chart.Name }}!
+
+Your release is named: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+
+== Getting Started ==
+
+1. Create a DynamicPrefix resource to start receiving IPv6 prefixes:
+
+   kubectl apply -f - <<EOF
+   apiVersion: dynamic-prefix.io/v1alpha1
+   kind: DynamicPrefix
+   metadata:
+     name: my-prefix
+   spec:
+     acquisition:
+       dhcpv6pd:
+         interface: eth0
+     subnets:
+       - name: loadbalancers
+         offset: 0
+         prefixLength: 64
+       - name: services
+         offset: 1
+         prefixLength: 64
+   EOF
+
+2. Check the status of your DynamicPrefix:
+
+   kubectl get dynamicprefixes
+   kubectl describe dynamicprefix my-prefix
+
+3. Add annotations to resources you want to be updated when the prefix changes:
+
+   For CiliumLoadBalancerIPPool:
+
+   kubectl annotate ciliumloadbalancerippool my-pool \
+     dynamic-prefix.io/name=my-prefix \
+     dynamic-prefix.io/subnet=loadbalancers
+
+   For CiliumCIDRGroup:
+
+   kubectl annotate ciliumcidrgroup my-group \
+     dynamic-prefix.io/name=my-prefix \
+     dynamic-prefix.io/subnet=services
+
+== Watch Configuration ==
+
+Currently watching for resources with annotation: dynamic-prefix.io/name
+
+{{- if .Values.watch.ciliumLoadBalancerIPPool.enabled }}
+- CiliumLoadBalancerIPPool: Enabled
+  {{- if .Values.watch.ciliumLoadBalancerIPPool.labelSelector }}
+  Label selector: {{ .Values.watch.ciliumLoadBalancerIPPool.labelSelector | toJson }}
+  {{- end }}
+{{- end }}
+
+{{- if .Values.watch.ciliumCIDRGroup.enabled }}
+- CiliumCIDRGroup: Enabled
+  {{- if .Values.watch.ciliumCIDRGroup.labelSelector }}
+  Label selector: {{ .Values.watch.ciliumCIDRGroup.labelSelector | toJson }}
+  {{- end }}
+{{- end }}
+
+{{- if .Values.watch.ingress.enabled }}
+- Ingress: Enabled
+  {{- if .Values.watch.ingress.ingressClassName }}
+  Ingress class: {{ .Values.watch.ingress.ingressClassName }}
+  {{- end }}
+{{- end }}
+
+{{- if .Values.watch.service.enabled }}
+- Service: Enabled (types: {{ .Values.watch.service.types | join ", " }})
+{{- end }}
+
+== Monitoring ==
+
+{{- if .Values.config.metrics.enabled }}
+Metrics are available at: http://{{ include "dynamic-prefix-operator.fullname" . }}-metrics:8080/metrics
+{{- if .Values.serviceMonitor.enabled }}
+A ServiceMonitor has been created for Prometheus Operator.
+{{- end }}
+{{- end }}
+
+== Documentation ==
+
+For more information, visit:
+https://github.com/jr42/dynamic-prefix-operator

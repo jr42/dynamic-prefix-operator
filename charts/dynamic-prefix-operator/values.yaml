@@ -1,0 +1,234 @@
+# Default values for dynamic-prefix-operator.
+
+# -- Number of replicas (only 1 supported due to leader election)
+replicaCount: 1
+
+image:
+  # -- Container image repository
+  repository: ghcr.io/jr42/dynamic-prefix-operator
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+  # -- Overrides the image tag (default is the chart appVersion)
+  tag: ""
+
+# -- Image pull secrets for private registries
+imagePullSecrets: []
+
+# -- Override the name of the chart
+nameOverride: ""
+
+# -- Override the full name of the chart
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create a service account
+  create: true
+  # -- Annotations to add to the service account
+  annotations: {}
+  # -- The name of the service account (generated if not set)
+  name: ""
+
+# -- Pod annotations
+podAnnotations: {}
+
+# -- Pod labels
+podLabels: {}
+
+# -- Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container security context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+
+# -- Resource limits and requests
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+# -- Node selector
+nodeSelector: {}
+
+# -- Tolerations
+tolerations: []
+
+# -- Affinity rules
+affinity: {}
+
+# -- Priority class name
+priorityClassName: ""
+
+# ==============================================================================
+# Operator Configuration
+# ==============================================================================
+config:
+  # -- Log level (debug, info, warn, error)
+  logLevel: info
+
+  # -- Enable leader election for HA deployments
+  leaderElection:
+    enabled: true
+    # -- Lease duration
+    leaseDuration: 15s
+    # -- Renew deadline
+    renewDeadline: 10s
+    # -- Retry period
+    retryPeriod: 2s
+
+  # -- Metrics configuration
+  metrics:
+    # -- Enable metrics endpoint
+    enabled: true
+    # -- Metrics bind address
+    bindAddress: ":8080"
+
+  # -- Health probe configuration
+  health:
+    # -- Health probe bind address
+    bindAddress: ":8081"
+
+# ==============================================================================
+# Watch Configuration - Control which resources the operator manages
+# ==============================================================================
+watch:
+  # -- Namespaces to watch. Empty means all namespaces.
+  # For cluster-scoped resources like CiliumLoadBalancerIPPool, this is ignored.
+  namespaces: []
+
+  # ---------------------------------------------------------------------------
+  # Cilium LoadBalancerIPPool Configuration
+  # ---------------------------------------------------------------------------
+  ciliumLoadBalancerIPPool:
+    # -- Enable watching CiliumLoadBalancerIPPool resources
+    enabled: true
+    # -- Only watch pools with these labels (empty = all pools with annotation)
+    labelSelector: {}
+    #   app.kubernetes.io/managed-by: dynamic-prefix-operator
+    # -- Only watch pools with these annotations (in addition to dynamic-prefix.io/name)
+    annotationSelector: {}
+    #   environment: production
+
+  # ---------------------------------------------------------------------------
+  # Cilium CIDRGroup Configuration
+  # ---------------------------------------------------------------------------
+  ciliumCIDRGroup:
+    # -- Enable watching CiliumCIDRGroup resources
+    enabled: true
+    # -- Only watch groups with these labels
+    labelSelector: {}
+    # -- Only watch groups with these annotations
+    annotationSelector: {}
+
+  # ---------------------------------------------------------------------------
+  # Ingress Configuration (for future use)
+  # ---------------------------------------------------------------------------
+  ingress:
+    # -- Enable watching Ingress resources
+    enabled: false
+    # -- Ingress class to watch (empty = all classes)
+    ingressClassName: ""
+    # -- Only watch ingresses with these labels
+    labelSelector: {}
+    #   dynamic-prefix.io/enabled: "true"
+    # -- Only watch ingresses with these annotations
+    annotationSelector: {}
+
+  # ---------------------------------------------------------------------------
+  # Service Configuration (for future use)
+  # ---------------------------------------------------------------------------
+  service:
+    # -- Enable watching Service resources
+    enabled: false
+    # -- Only watch services of these types
+    types:
+      - LoadBalancer
+    # -- Only watch services with these labels
+    labelSelector: {}
+    # -- Only watch services with these annotations
+    annotationSelector: {}
+
+# ==============================================================================
+# DynamicPrefix Default Settings
+# ==============================================================================
+dynamicPrefix:
+  # -- Default transition settings for prefix changes
+  transition:
+    # -- How long to keep old prefix active during transitions (minutes)
+    drainPeriodMinutes: 60
+    # -- Maximum number of prefix history entries to retain
+    maxPrefixHistory: 2
+
+  # -- Default DHCPv6-PD settings
+  dhcpv6pd:
+    # -- Default requested prefix length (48-64)
+    requestedPrefixLength: 56
+
+# ==============================================================================
+# Network Policy
+# ==============================================================================
+networkPolicy:
+  # -- Create NetworkPolicy resources
+  enabled: false
+  # -- Additional ingress rules
+  additionalIngress: []
+  # -- Additional egress rules
+  additionalEgress: []
+
+# ==============================================================================
+# Pod Disruption Budget
+# ==============================================================================
+podDisruptionBudget:
+  # -- Create PodDisruptionBudget
+  enabled: false
+  # -- Minimum available pods
+  minAvailable: 1
+  # -- Maximum unavailable pods (alternative to minAvailable)
+  # maxUnavailable: 0
+
+# ==============================================================================
+# Prometheus / Monitoring
+# ==============================================================================
+serviceMonitor:
+  # -- Create ServiceMonitor for Prometheus Operator
+  enabled: false
+  # -- Additional labels for ServiceMonitor
+  additionalLabels: {}
+  # -- Scrape interval
+  interval: 30s
+  # -- Scrape timeout
+  scrapeTimeout: 10s
+  # -- Metric relabeling configs
+  metricRelabelings: []
+  # -- Relabeling configs
+  relabelings: []
+
+# ==============================================================================
+# CRD Installation
+# ==============================================================================
+crds:
+  # -- Install CRDs with the chart
+  install: true
+  # -- Keep CRDs on chart uninstall
+  keep: true
+  # -- Annotations for CRDs
+  annotations: {}
+
+# ==============================================================================
+# RBAC Configuration
+# ==============================================================================
+rbac:
+  # -- Create RBAC resources
+  create: true
+  # -- Additional rules to add to the ClusterRole
+  additionalRules: []
