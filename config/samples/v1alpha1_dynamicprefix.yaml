@@ -1,0 +1,9 @@
+apiVersion: dynamic-prefix.io/v1alpha1
+kind: DynamicPrefix
+metadata:
+  labels:
+    app.kubernetes.io/name: dynamic-prefix-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: dynamicprefix-sample
+spec:
+  # TODO(user): Add fields here

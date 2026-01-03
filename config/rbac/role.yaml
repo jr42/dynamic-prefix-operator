@@ -1,0 +1,32 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - dynamic-prefix.io
+  resources:
+  - dynamicprefixes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - dynamic-prefix.io
+  resources:
+  - dynamicprefixes/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - dynamic-prefix.io
+  resources:
+  - dynamicprefixes/status
+  verbs:
+  - get
+  - patch
+  - update
