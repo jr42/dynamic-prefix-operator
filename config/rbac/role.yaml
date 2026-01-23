@@ -5,6 +5,17 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - cilium.io
+  resources:
+  - ciliumcidrgroups
+  - ciliumloadbalancerippools
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - dynamic-prefix.io
   resources:
   - dynamicprefixes

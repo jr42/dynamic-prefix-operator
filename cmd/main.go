@@ -37,6 +37,7 @@ import (
 
 	dynamicprefixiov1alpha1 "github.com/jr42/dynamic-prefix-operator/api/v1alpha1"
 	"github.com/jr42/dynamic-prefix-operator/internal/controller"
+	"github.com/jr42/dynamic-prefix-operator/internal/prefix"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -178,11 +179,26 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := controller.NewDynamicPrefixReconciler(
+	// Create the receiver factory for prefix acquisition
+	receiverFactory := prefix.NewReceiverFactory()
+
+	// Set up DynamicPrefix controller with receiver factory
+	dynamicPrefixReconciler := controller.NewDynamicPrefixReconciler(
 		mgr.GetClient(),
 		mgr.GetScheme(),
-	).SetupWithManager(mgr); err != nil {
+	)
+	dynamicPrefixReconciler.ReceiverFactory = receiverFactory
+	if err := dynamicPrefixReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DynamicPrefix")
+		os.Exit(1)
+	}
+
+	// Set up PoolSync controller for Cilium resource synchronization
+	if err := (&controller.PoolSyncReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PoolSync")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
