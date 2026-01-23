@@ -23,9 +23,11 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o ma
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM gcr.io/distroless/static:nonroot
+# NOTE: Using regular distroless (not :nonroot) because raw ICMPv6 sockets
+# for RA monitoring require root even with CAP_NET_RAW.
+FROM gcr.io/distroless/static:latest
 WORKDIR /
 COPY --from=builder /workspace/manager .
-USER 65532:65532
+# User is controlled via Kubernetes securityContext (default: root for raw socket access)
 
 ENTRYPOINT ["/manager"]

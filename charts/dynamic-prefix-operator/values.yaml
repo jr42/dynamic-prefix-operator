@@ -35,10 +35,14 @@ podAnnotations: {}
 podLabels: {}
 
 # -- Pod security context
+# NOTE: Raw ICMPv6 sockets for RA monitoring require root (UID 0) even with
+# CAP_NET_RAW. This is a Linux kernel limitation. Similar operators (Cilium,
+# Calico) also run as root for network access.
 podSecurityContext:
-  runAsNonRoot: true
+  runAsNonRoot: false
+  runAsUser: 0
   seccompProfile:
-    type: RuntimeDefault
+    type: Unconfined
 
 # -- Container security context
 # NOTE: NET_RAW is required for the operator to function.
