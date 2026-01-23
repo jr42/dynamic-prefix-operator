@@ -9,7 +9,6 @@ image:
   # -- Image pull policy
   pullPolicy: IfNotPresent
   # -- Overrides the image tag (default is the chart appVersion)
-  # For testing: use "main" tag. For releases: use specific version or leave empty for appVersion
   tag: "main"
 
 # -- Image pull secrets for private registries
@@ -42,15 +41,11 @@ podSecurityContext:
     type: RuntimeDefault
 
 # -- Container security context
-# NOTE: When using prefixAcquisition.mode "dhcpv6pd" or "both", NET_RAW capability
-# is required for DHCPv6 client operations. The chart automatically adds this
-# based on the mode setting.
 securityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop:
       - ALL
-    # add: [] # NET_RAW is auto-added when mode requires it
   readOnlyRootFilesystem: true
 
 # -- Resource limits and requests
@@ -78,18 +73,12 @@ priorityClassName: ""
 # Operator Configuration
 # ==============================================================================
 config:
-  # -- Log level (debug, info, warn, error)
+  # -- Log level (debug, info, error)
   logLevel: info
 
   # -- Enable leader election for HA deployments
   leaderElection:
     enabled: true
-    # -- Lease duration
-    leaseDuration: 15s
-    # -- Renew deadline
-    renewDeadline: 10s
-    # -- Retry period
-    retryPeriod: 2s
 
   # -- Metrics configuration
   metrics:
@@ -104,143 +93,16 @@ config:
     bindAddress: ":8081"
 
 # ==============================================================================
-# Watch Configuration - Control which resources the operator manages
-# ==============================================================================
-watch:
-  # -- Namespaces to watch. Empty means all namespaces.
-  # For cluster-scoped resources like CiliumLoadBalancerIPPool, this is ignored.
-  namespaces: []
-
-  # ---------------------------------------------------------------------------
-  # Cilium LoadBalancerIPPool Configuration
-  # ---------------------------------------------------------------------------
-  ciliumLoadBalancerIPPool:
-    # -- Enable watching CiliumLoadBalancerIPPool resources
-    enabled: true
-    # -- Only watch pools with these labels (empty = all pools with annotation)
-    labelSelector: {}
-    #   app.kubernetes.io/managed-by: dynamic-prefix-operator
-    # -- Only watch pools with these annotations (in addition to dynamic-prefix.io/name)
-    annotationSelector: {}
-    #   environment: production
-
-  # ---------------------------------------------------------------------------
-  # Cilium CIDRGroup Configuration
-  # ---------------------------------------------------------------------------
-  ciliumCIDRGroup:
-    # -- Enable watching CiliumCIDRGroup resources
-    enabled: true
-    # -- Only watch groups with these labels
-    labelSelector: {}
-    # -- Only watch groups with these annotations
-    annotationSelector: {}
-
-  # ---------------------------------------------------------------------------
-  # Ingress Configuration (for future use)
-  # ---------------------------------------------------------------------------
-  ingress:
-    # -- Enable watching Ingress resources
-    enabled: false
-    # -- Ingress class to watch (empty = all classes)
-    ingressClassName: ""
-    # -- Only watch ingresses with these labels
-    labelSelector: {}
-    #   dynamic-prefix.io/enabled: "true"
-    # -- Only watch ingresses with these annotations
-    annotationSelector: {}
-
-  # ---------------------------------------------------------------------------
-  # Service Configuration (for future use)
-  # ---------------------------------------------------------------------------
-  service:
-    # -- Enable watching Service resources
-    enabled: false
-    # -- Only watch services of these types
-    types:
-      - LoadBalancer
-    # -- Only watch services with these labels
-    labelSelector: {}
-    # -- Only watch services with these annotations
-    annotationSelector: {}
-
-# ==============================================================================
-# Prefix Acquisition Configuration
-# ==============================================================================
-prefixAcquisition:
-  # -- Acquisition mode: "ra" (passive/recommended), "dhcpv6pd" (active), or "both"
-  # - "ra": Passively monitor Router Advertisements. Safe for hostNetwork, won't
-  #         conflict with existing DHCPv6 clients (Talos, systemd-networkd, etc.)
-  # - "dhcpv6pd": Actively request prefix via DHCPv6-PD. WILL CONFLICT with any
-  #               existing DHCPv6 client on the same interface. Only use with
-  #               dedicated interface (Multus) or when no other client exists.
-  # - "both": DHCPv6-PD primary with RA fallback after consecutive failures.
-  mode: "ra"
-
-  # -- Network interface for prefix acquisition.
-  # REQUIRED when using hostNetwork. For Multus, can be auto-detected from
-  # net-attach-def annotation if left empty.
-  interface: ""
-
-  # -- DHCPv6-PD specific settings (only used when mode is "dhcpv6pd" or "both")
-  dhcpv6pd:
-    # -- Requested prefix length hint (48-64)
-    requestedPrefixLength: 56
-
-  # -- Router Advertisement specific settings
-  routerAdvertisement:
-    # -- Enable RA monitoring (only used when mode is "ra" or "both")
-    enabled: true
-
-# ==============================================================================
 # Network Configuration
 # ==============================================================================
 network:
   # -- Use host network namespace.
-  # Required for RA mode to see Router Advertisements on the host interface.
-  # WARNING: When true, ensure 'prefixAcquisition.interface' is set correctly.
+  # Required for the operator to see Router Advertisements on host interfaces.
+  # When true, the operator pod runs in the host network namespace.
   hostNetwork: false
 
   # -- DNS policy when using hostNetwork (ClusterFirstWithHostNet recommended)
   dnsPolicy: ""
-
-  # -- Multus network attachment definition (alternative to hostNetwork)
-  # When set, the operator will use this network for prefix acquisition.
-  # Example: "default/ipv6-upstream"
-  multusNetwork: ""
-
-# ==============================================================================
-# DynamicPrefix Default Settings
-# ==============================================================================
-dynamicPrefix:
-  # -- Create a default DynamicPrefix CR on install
-  createDefault: false
-
-  # -- Name of the default DynamicPrefix CR
-  defaultName: "default"
-
-  # -- Default transition settings for prefix changes
-  transition:
-    # -- How long to keep old prefix active during transitions (minutes)
-    drainPeriodMinutes: 60
-    # -- Maximum number of prefix history entries to retain
-    maxPrefixHistory: 2
-
-  # -- Default address range definitions for Mode 1 (recommended for home/SOHO)
-  # These define reserved ranges within the /64 that won't conflict with SLAAC/DHCPv6
-  addressRanges: []
-  #   - name: loadbalancers
-  #     # Reserve the last 4096 addresses of the /64
-  #     start: "::f000:0:0:0"
-  #     end: "::ffff:ffff:ffff:ffff"
-
-  # -- Default subnet definitions for Mode 2 (advanced, requires BGP)
-  subnets: []
-  #   - name: lb-pool
-  #     prefixLength: 120
-  #     offset: 0
-  #   - name: egress
-  #     prefixLength: 64
-  #     offset: 256
 
 # ==============================================================================
 # Network Policy

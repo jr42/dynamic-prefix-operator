@@ -34,7 +34,6 @@ rules:
     verbs:
       - update
 
-  {{- if .Values.watch.ciliumLoadBalancerIPPool.enabled }}
   # CiliumLoadBalancerIPPool permissions
   - apiGroups:
       - cilium.io
@@ -52,9 +51,7 @@ rules:
       - ciliumloadbalancerippools/status
     verbs:
       - get
-  {{- end }}
 
-  {{- if .Values.watch.ciliumCIDRGroup.enabled }}
   # CiliumCIDRGroup permissions
   - apiGroups:
       - cilium.io
@@ -66,47 +63,6 @@ rules:
       - patch
       - update
       - watch
-  {{- end }}
-
-  {{- if .Values.watch.ingress.enabled }}
-  # Ingress permissions
-  - apiGroups:
-      - networking.k8s.io
-    resources:
-      - ingresses
-    verbs:
-      - get
-      - list
-      - watch
-  - apiGroups:
-      - networking.k8s.io
-    resources:
-      - ingresses/status
-    verbs:
-      - get
-      - patch
-      - update
-  {{- end }}
-
-  {{- if .Values.watch.service.enabled }}
-  # Service permissions
-  - apiGroups:
-      - ""
-    resources:
-      - services
-    verbs:
-      - get
-      - list
-      - watch
-  - apiGroups:
-      - ""
-    resources:
-      - services/status
-    verbs:
-      - get
-      - patch
-      - update
-  {{- end }}
 
   # Leader election permissions
   {{- if .Values.config.leaderElection.enabled }}

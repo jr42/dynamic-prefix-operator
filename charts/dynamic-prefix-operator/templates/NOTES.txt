@@ -7,6 +7,8 @@ Namespace: {{ .Release.Namespace }}
 
 1. Create a DynamicPrefix resource to start receiving IPv6 prefixes:
 
+   # Mode 1: Address Range (Recommended for home/SOHO)
+   # Reserve a range within your existing /64
    kubectl apply -f - <<EOF
    apiVersion: dynamic-prefix.io/v1alpha1
    kind: DynamicPrefix
@@ -14,15 +16,13 @@ Namespace: {{ .Release.Namespace }}
      name: my-prefix
    spec:
      acquisition:
-       dhcpv6pd:
+       routerAdvertisement:
          interface: eth0
-     subnets:
+         enabled: true
+     addressRanges:
        - name: loadbalancers
-         offset: 0
-         prefixLength: 64
-       - name: services
-         offset: 1
-         prefixLength: 64
+         start: "::f000:0:0:0"
+         end: "::ffff:ffff:ffff:ffff"
    EOF
 
 2. Check the status of your DynamicPrefix:
@@ -30,53 +30,30 @@ Namespace: {{ .Release.Namespace }}
    kubectl get dynamicprefixes
    kubectl describe dynamicprefix my-prefix
 
-3. Add annotations to resources you want to be updated when the prefix changes:
+3. Add annotations to Cilium resources you want to sync:
 
-   For CiliumLoadBalancerIPPool:
+   For CiliumLoadBalancerIPPool (using address range):
 
    kubectl annotate ciliumloadbalancerippool my-pool \
      dynamic-prefix.io/name=my-prefix \
-     dynamic-prefix.io/subnet=loadbalancers
+     dynamic-prefix.io/address-range=loadbalancers
 
    For CiliumCIDRGroup:
 
    kubectl annotate ciliumcidrgroup my-group \
      dynamic-prefix.io/name=my-prefix \
-     dynamic-prefix.io/subnet=services
+     dynamic-prefix.io/address-range=loadbalancers
 
-== Watch Configuration ==
+== Supported Annotations ==
 
-Currently watching for resources with annotation: dynamic-prefix.io/name
-
-{{- if .Values.watch.ciliumLoadBalancerIPPool.enabled }}
-- CiliumLoadBalancerIPPool: Enabled
-  {{- if .Values.watch.ciliumLoadBalancerIPPool.labelSelector }}
-  Label selector: {{ .Values.watch.ciliumLoadBalancerIPPool.labelSelector | toJson }}
-  {{- end }}
-{{- end }}
-
-{{- if .Values.watch.ciliumCIDRGroup.enabled }}
-- CiliumCIDRGroup: Enabled
-  {{- if .Values.watch.ciliumCIDRGroup.labelSelector }}
-  Label selector: {{ .Values.watch.ciliumCIDRGroup.labelSelector | toJson }}
-  {{- end }}
-{{- end }}
-
-{{- if .Values.watch.ingress.enabled }}
-- Ingress: Enabled
-  {{- if .Values.watch.ingress.ingressClassName }}
-  Ingress class: {{ .Values.watch.ingress.ingressClassName }}
-  {{- end }}
-{{- end }}
-
-{{- if .Values.watch.service.enabled }}
-- Service: Enabled (types: {{ .Values.watch.service.types | join ", " }})
-{{- end }}
+- dynamic-prefix.io/name: References the DynamicPrefix CR
+- dynamic-prefix.io/address-range: References an address range (Mode 1)
+- dynamic-prefix.io/subnet: References a subnet (Mode 2)
 
 == Monitoring ==
 
 {{- if .Values.config.metrics.enabled }}
-Metrics are available at: http://{{ include "dynamic-prefix-operator.fullname" . }}-metrics:8080/metrics
+Metrics are available at port {{ .Values.config.metrics.bindAddress }}
 {{- if .Values.serviceMonitor.enabled }}
 A ServiceMonitor has been created for Prometheus Operator.
 {{- end }}
