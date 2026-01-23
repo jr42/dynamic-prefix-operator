@@ -41,11 +41,15 @@ podSecurityContext:
     type: RuntimeDefault
 
 # -- Container security context
+# NOTE: NET_RAW is required for the operator to function.
+# It's needed for both RA monitoring (ICMPv6) and DHCPv6-PD (raw sockets).
 securityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop:
       - ALL
+    add:
+      - NET_RAW
   readOnlyRootFilesystem: true
 
 # -- Resource limits and requests
