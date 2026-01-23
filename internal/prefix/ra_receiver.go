@@ -206,9 +206,12 @@ func (r *RAReceiver) handleRouterAdvertisement(ra *ndp.RouterAdvertisement) {
 			"validLifetime", pi.ValidLifetime,
 			"preferredLifetime", pi.PreferredLifetime)
 
-		// Skip if not on-link or not for autonomous address configuration
-		if !pi.OnLink || !pi.AutonomousAddressConfiguration {
-			log.V(1).Info("Skipping prefix: not on-link or not autonomous", "prefix", pi.Prefix)
+		// Skip if not on-link
+		// Note: We don't require autonomous=true because that only controls SLAAC.
+		// Many ISPs (e.g., Deutsche Telekom) advertise prefixes with autonomous=false
+		// when using stateful DHCPv6 for address assignment. The prefix is still valid.
+		if !pi.OnLink {
+			log.V(1).Info("Skipping prefix: not on-link", "prefix", pi.Prefix)
 			continue
 		}
 
