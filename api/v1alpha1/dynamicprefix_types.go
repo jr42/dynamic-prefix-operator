@@ -26,7 +26,15 @@ type DynamicPrefixSpec struct {
 	// +required
 	Acquisition AcquisitionSpec `json:"acquisition"`
 
-	// Subnets defines how to subdivide the received prefix into smaller subnets
+	// AddressRanges defines address ranges within the received prefix.
+	// Use this for Mode 1 (recommended): reserve a range within your /64 that
+	// your router's DHCPv6/SLAAC won't hand out. No BGP required.
+	// +optional
+	AddressRanges []AddressRangeSpec `json:"addressRanges,omitempty"`
+
+	// Subnets defines how to subdivide the received prefix into smaller subnets.
+	// Use this for Mode 2 (advanced): carve out dedicated /64s from a larger
+	// prefix. Requires BGP to announce the subnets to your router.
 	// +optional
 	Subnets []SubnetSpec `json:"subnets,omitempty"`
 
@@ -72,7 +80,31 @@ type RouterAdvertisementSpec struct {
 	Enabled bool `json:"enabled,omitempty"`
 }
 
-// SubnetSpec defines a subnet to be carved out of the received prefix
+// AddressRangeSpec defines an address range within the received prefix.
+// This is used for Mode 1 where you reserve a portion of your /64 that
+// the router won't hand out via DHCPv6/SLAAC.
+type AddressRangeSpec struct {
+	// Name identifies this address range (used in annotations to reference it)
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+
+	// Start is the start of the range, specified as a suffix to the prefix.
+	// For example, "::f000:0:0:0" means start at prefix + 0xf000:0:0:0.
+	// +required
+	Start string `json:"start"`
+
+	// End is the end of the range (inclusive), specified as a suffix.
+	// For example, "::ffff:ffff:ffff:ffff" means end at prefix + 0xffff:ffff:ffff:ffff.
+	// +required
+	End string `json:"end"`
+}
+
+// SubnetSpec defines a subnet to be carved out of the received prefix.
+// This is used for Mode 2 (advanced) where you claim a dedicated /64 from
+// a larger prefix and announce it via BGP.
 type SubnetSpec struct {
 	// Name identifies this subnet (used in annotations to reference it)
 	// +required
@@ -124,6 +156,10 @@ type DynamicPrefixStatus struct {
 	// +optional
 	LeaseExpiresAt *metav1.Time `json:"leaseExpiresAt,omitempty"`
 
+	// AddressRanges contains the calculated address ranges
+	// +optional
+	AddressRanges []AddressRangeStatus `json:"addressRanges,omitempty"`
+
 	// Subnets contains the calculated subnet CIDRs
 	// +optional
 	Subnets []SubnetStatus `json:"subnets,omitempty"`
@@ -149,6 +185,23 @@ const (
 	PrefixSourceStatic              PrefixSource = "static"
 	PrefixSourceUnknown             PrefixSource = "unknown"
 )
+
+// AddressRangeStatus represents the current state of an address range
+type AddressRangeStatus struct {
+	// Name is the address range identifier
+	Name string `json:"name"`
+
+	// Start is the first address in the range (full address)
+	Start string `json:"start"`
+
+	// End is the last address in the range (full address)
+	End string `json:"end"`
+
+	// CIDR is an approximate CIDR representation for compatibility.
+	// For Cilium pools, use Start/End for precise range definition.
+	// This may be a larger range if the start/end don't align to CIDR boundaries.
+	CIDR string `json:"cidr,omitempty"`
+}
 
 // SubnetStatus represents the current state of a subnet
 type SubnetStatus struct {

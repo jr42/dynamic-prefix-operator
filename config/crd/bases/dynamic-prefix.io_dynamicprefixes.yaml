@@ -90,12 +90,50 @@ spec:
                         type: string
                     type: object
                 type: object
-              subnets:
-                description: Subnets defines how to subdivide the received prefix
-                  into smaller subnets
+              addressRanges:
+                description: |-
+                  AddressRanges defines address ranges within the received prefix.
+                  Use this for Mode 1 (recommended): reserve a range within your /64 that
+                  your router's DHCPv6/SLAAC won't hand out. No BGP required.
                 items:
-                  description: SubnetSpec defines a subnet to be carved out of the
-                    received prefix
+                  description: |-
+                    AddressRangeSpec defines an address range within the received prefix.
+                    This is used for Mode 1 where you reserve a portion of your /64 that
+                    the router won't hand out via DHCPv6/SLAAC.
+                  properties:
+                    end:
+                      description: |-
+                        End is the end of the range (inclusive), specified as a suffix.
+                        For example, "::ffff:ffff:ffff:ffff" means end at prefix + 0xffff:ffff:ffff:ffff.
+                      type: string
+                    name:
+                      description: Name identifies this address range (used in annotations
+                        to reference it)
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    start:
+                      description: |-
+                        Start is the start of the range, specified as a suffix to the prefix.
+                        For example, "::f000:0:0:0" means start at prefix + 0xf000:0:0:0.
+                      type: string
+                  required:
+                  - end
+                  - name
+                  - start
+                  type: object
+                type: array
+              subnets:
+                description: |-
+                  Subnets defines how to subdivide the received prefix into smaller subnets.
+                  Use this for Mode 2 (advanced): carve out dedicated /64s from a larger
+                  prefix. Requires BGP to announce the subnets to your router.
+                items:
+                  description: |-
+                    SubnetSpec defines a subnet to be carved out of the received prefix.
+                    This is used for Mode 2 (advanced) where you claim a dedicated /64 from
+                    a larger prefix and announce it via BGP.
                   properties:
                     name:
                       description: Name identifies this subnet (used in annotations
@@ -146,6 +184,33 @@ spec:
           status:
             description: Status defines the observed state of DynamicPrefix
             properties:
+              addressRanges:
+                description: AddressRanges contains the calculated address ranges
+                items:
+                  description: AddressRangeStatus represents the current state of
+                    an address range
+                  properties:
+                    cidr:
+                      description: |-
+                        CIDR is an approximate CIDR representation for compatibility.
+                        For Cilium pools, use Start/End for precise range definition.
+                        This may be a larger range if the start/end don't align to CIDR boundaries.
+                      type: string
+                    end:
+                      description: End is the last address in the range (full address)
+                      type: string
+                    name:
+                      description: Name is the address range identifier
+                      type: string
+                    start:
+                      description: Start is the first address in the range (full address)
+                      type: string
+                  required:
+                  - end
+                  - name
+                  - start
+                  type: object
+                type: array
               conditions:
                 description: Conditions represent the current state of the DynamicPrefix
                 items:

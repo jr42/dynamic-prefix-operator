@@ -42,11 +42,15 @@ podSecurityContext:
     type: RuntimeDefault
 
 # -- Container security context
+# NOTE: When using prefixAcquisition.mode "dhcpv6pd" or "both", NET_RAW capability
+# is required for DHCPv6 client operations. The chart automatically adds this
+# based on the mode setting.
 securityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop:
       - ALL
+    # add: [] # NET_RAW is auto-added when mode requires it
   readOnlyRootFilesystem: true
 
 # -- Resource limits and requests
@@ -160,9 +164,60 @@ watch:
     annotationSelector: {}
 
 # ==============================================================================
+# Prefix Acquisition Configuration
+# ==============================================================================
+prefixAcquisition:
+  # -- Acquisition mode: "ra" (passive/recommended), "dhcpv6pd" (active), or "both"
+  # - "ra": Passively monitor Router Advertisements. Safe for hostNetwork, won't
+  #         conflict with existing DHCPv6 clients (Talos, systemd-networkd, etc.)
+  # - "dhcpv6pd": Actively request prefix via DHCPv6-PD. WILL CONFLICT with any
+  #               existing DHCPv6 client on the same interface. Only use with
+  #               dedicated interface (Multus) or when no other client exists.
+  # - "both": DHCPv6-PD primary with RA fallback after consecutive failures.
+  mode: "ra"
+
+  # -- Network interface for prefix acquisition.
+  # REQUIRED when using hostNetwork. For Multus, can be auto-detected from
+  # net-attach-def annotation if left empty.
+  interface: ""
+
+  # -- DHCPv6-PD specific settings (only used when mode is "dhcpv6pd" or "both")
+  dhcpv6pd:
+    # -- Requested prefix length hint (48-64)
+    requestedPrefixLength: 56
+
+  # -- Router Advertisement specific settings
+  routerAdvertisement:
+    # -- Enable RA monitoring (only used when mode is "ra" or "both")
+    enabled: true
+
+# ==============================================================================
+# Network Configuration
+# ==============================================================================
+network:
+  # -- Use host network namespace.
+  # Required for RA mode to see Router Advertisements on the host interface.
+  # WARNING: When true, ensure 'prefixAcquisition.interface' is set correctly.
+  hostNetwork: false
+
+  # -- DNS policy when using hostNetwork (ClusterFirstWithHostNet recommended)
+  dnsPolicy: ""
+
+  # -- Multus network attachment definition (alternative to hostNetwork)
+  # When set, the operator will use this network for prefix acquisition.
+  # Example: "default/ipv6-upstream"
+  multusNetwork: ""
+
+# ==============================================================================
 # DynamicPrefix Default Settings
 # ==============================================================================
 dynamicPrefix:
+  # -- Create a default DynamicPrefix CR on install
+  createDefault: false
+
+  # -- Name of the default DynamicPrefix CR
+  defaultName: "default"
+
   # -- Default transition settings for prefix changes
   transition:
     # -- How long to keep old prefix active during transitions (minutes)
@@ -170,10 +225,22 @@ dynamicPrefix:
     # -- Maximum number of prefix history entries to retain
     maxPrefixHistory: 2
 
-  # -- Default DHCPv6-PD settings
-  dhcpv6pd:
-    # -- Default requested prefix length (48-64)
-    requestedPrefixLength: 56
+  # -- Default address range definitions for Mode 1 (recommended for home/SOHO)
+  # These define reserved ranges within the /64 that won't conflict with SLAAC/DHCPv6
+  addressRanges: []
+  #   - name: loadbalancers
+  #     # Reserve the last 4096 addresses of the /64
+  #     start: "::f000:0:0:0"
+  #     end: "::ffff:ffff:ffff:ffff"
+
+  # -- Default subnet definitions for Mode 2 (advanced, requires BGP)
+  subnets: []
+  #   - name: lb-pool
+  #     prefixLength: 120
+  #     offset: 0
+  #   - name: egress
+  #     prefixLength: 64
+  #     offset: 256
 
 # ==============================================================================
 # Network Policy

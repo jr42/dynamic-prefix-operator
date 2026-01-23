@@ -39,8 +39,10 @@ import (
 const (
 	// AnnotationName references the DynamicPrefix CR name.
 	AnnotationName = "dynamic-prefix.io/name"
-	// AnnotationSubnet specifies which subnet from status.subnets to use.
+	// AnnotationSubnet specifies which subnet from status.subnets to use (Mode 2).
 	AnnotationSubnet = "dynamic-prefix.io/subnet"
+	// AnnotationAddressRange specifies which address range from status.addressRanges to use (Mode 1).
+	AnnotationAddressRange = "dynamic-prefix.io/address-range"
 	// AnnotationLastSync is the timestamp set by operator after update.
 	AnnotationLastSync = "dynamic-prefix.io/last-sync"
 )
@@ -60,6 +62,18 @@ var (
 		Kind:    "CiliumCIDRGroup",
 	}
 )
+
+// poolConfiguration holds the resolved configuration for a pool update.
+type poolConfiguration struct {
+	// useAddressRange indicates whether to use start/end addresses (true) or CIDR (false).
+	useAddressRange bool
+	// start is the first address in the range (Mode 1 only).
+	start string
+	// end is the last address in the range (Mode 1 only).
+	end string
+	// cidr is the CIDR notation (Mode 2 or fallback).
+	cidr string
+}
 
 // PoolSyncReconciler reconciles Cilium pool resources annotated with dynamic-prefix.io annotations.
 type PoolSyncReconciler struct {
@@ -96,13 +110,14 @@ func (r *PoolSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	dpName, hasName := annotations[AnnotationName]
 	subnetName, hasSubnet := annotations[AnnotationSubnet]
+	addressRangeName, hasAddressRange := annotations[AnnotationAddressRange]
 
 	if !hasName {
 		// No dynamic-prefix.io/name annotation, nothing to do
 		return ctrl.Result{}, nil
 	}
 
-	log.Info("Syncing pool", "pool", req.Name, "dynamicPrefix", dpName, "subnet", subnetName)
+	log.Info("Syncing pool", "pool", req.Name, "dynamicPrefix", dpName, "subnet", subnetName, "addressRange", addressRangeName)
 
 	// Fetch the referenced DynamicPrefix
 	var dp dynamicprefixiov1alpha1.DynamicPrefix
@@ -111,17 +126,38 @@ func (r *PoolSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	// Find the subnet CIDR
-	var cidr string
-	if hasSubnet && subnetName != "" {
-		// Look for specific subnet
-		for _, s := range dp.Status.Subnets {
-			if s.Name == subnetName {
-				cidr = s.CIDR
+	// Determine the pool configuration based on annotations
+	// Address range (Mode 1) takes precedence as it provides precise start/end addresses
+	var poolConfig poolConfiguration
+	if hasAddressRange && addressRangeName != "" {
+		// Look for specific address range
+		for _, ar := range dp.Status.AddressRanges {
+			if ar.Name == addressRangeName {
+				poolConfig = poolConfiguration{
+					useAddressRange: true,
+					start:           ar.Start,
+					end:             ar.End,
+					cidr:            ar.CIDR, // Approximate CIDR for fallback
+				}
 				break
 			}
 		}
-		if cidr == "" {
+		if poolConfig.start == "" {
+			log.Info("Address range not found in DynamicPrefix status", "addressRange", addressRangeName)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+	} else if hasSubnet && subnetName != "" {
+		// Look for specific subnet (Mode 2)
+		for _, s := range dp.Status.Subnets {
+			if s.Name == subnetName {
+				poolConfig = poolConfiguration{
+					useAddressRange: false,
+					cidr:            s.CIDR,
+				}
+				break
+			}
+		}
+		if poolConfig.cidr == "" {
 			log.Info("Subnet not found in DynamicPrefix status", "subnet", subnetName)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
@@ -131,7 +167,10 @@ func (r *PoolSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			log.Info("DynamicPrefix has no current prefix")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
-		cidr = dp.Status.CurrentPrefix
+		poolConfig = poolConfiguration{
+			useAddressRange: false,
+			cidr:            dp.Status.CurrentPrefix,
+		}
 	}
 
 	// Update the pool based on its type
@@ -140,9 +179,10 @@ func (r *PoolSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	switch gvk.Kind {
 	case "CiliumLoadBalancerIPPool":
-		updateErr = r.updateLoadBalancerIPPool(ctx, pool, cidr)
+		updateErr = r.updateLoadBalancerIPPool(ctx, pool, poolConfig)
 	case "CiliumCIDRGroup":
-		updateErr = r.updateCIDRGroup(ctx, pool, cidr)
+		// CIDRGroup doesn't support start/end ranges, use CIDR only
+		updateErr = r.updateCIDRGroup(ctx, pool, poolConfig.cidr)
 	default:
 		log.Info("Unknown pool type", "kind", gvk.Kind)
 		return ctrl.Result{}, nil
@@ -153,19 +193,37 @@ func (r *PoolSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	log.Info("Pool synced successfully", "pool", req.Name, "cidr", cidr)
+	if poolConfig.useAddressRange {
+		log.Info("Pool synced successfully", "pool", req.Name, "start", poolConfig.start, "end", poolConfig.end)
+	} else {
+		log.Info("Pool synced successfully", "pool", req.Name, "cidr", poolConfig.cidr)
+	}
 	return ctrl.Result{}, nil
 }
 
-// updateLoadBalancerIPPool updates a CiliumLoadBalancerIPPool with the new CIDR.
-func (r *PoolSyncReconciler) updateLoadBalancerIPPool(ctx context.Context, pool *unstructured.Unstructured, cidr string) error {
-	// CiliumLoadBalancerIPPool spec.blocks is a list of CIDR blocks
-	// Format: spec.blocks[].cidr
-	blocks := []interface{}{
-		map[string]interface{}{
-			"cidr": cidr,
-		},
+// updateLoadBalancerIPPool updates a CiliumLoadBalancerIPPool with the new configuration.
+// It supports both CIDR-based blocks (Mode 2) and start/end address ranges (Mode 1).
+func (r *PoolSyncReconciler) updateLoadBalancerIPPool(ctx context.Context, pool *unstructured.Unstructured, config poolConfiguration) error {
+	// CiliumLoadBalancerIPPool spec.blocks is a list of IP blocks
+	// Format can be either:
+	// - spec.blocks[].cidr for CIDR-based allocation
+	// - spec.blocks[].start + spec.blocks[].stop for address range (Cilium uses "stop" not "end")
+	var block map[string]interface{}
+
+	if config.useAddressRange && config.start != "" && config.end != "" {
+		// Use start/stop for precise address range (Mode 1)
+		block = map[string]interface{}{
+			"start": config.start,
+			"stop":  config.end,
+		}
+	} else {
+		// Use CIDR (Mode 2 or fallback)
+		block = map[string]interface{}{
+			"cidr": config.cidr,
+		}
 	}
+
+	blocks := []interface{}{block}
 
 	if err := unstructured.SetNestedField(pool.Object, blocks, "spec", "blocks"); err != nil {
 		return fmt.Errorf("failed to set spec.blocks: %w", err)

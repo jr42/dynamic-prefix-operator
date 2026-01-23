@@ -4,8 +4,15 @@
 # This follows the 1Password Operator pattern where target resources
 # reference the source via annotations, rather than requiring a
 # separate binding resource.
+
+# =============================================================================
+# Mode 1: Address Range Examples (Recommended)
+# =============================================================================
+# Use dynamic-prefix.io/address-range to reference an address range.
+# This uses start/stop addresses for precise pool definition.
+
 ---
-# Cilium LoadBalancer IP Pool for external services
+# Cilium LoadBalancer IP Pool using address range (Mode 1)
 apiVersion: cilium.io/v2alpha1
 kind: CiliumLoadBalancerIPPool
 metadata:
@@ -14,11 +21,11 @@ metadata:
     # Reference to the DynamicPrefix resource
     dynamic-prefix.io/name: home-ipv6
 
-    # Which subnet from the DynamicPrefix to use
-    dynamic-prefix.io/subnet: loadbalancers
+    # Which address range from the DynamicPrefix to use
+    dynamic-prefix.io/address-range: loadbalancers
 spec:
-  # The operator manages this - it will populate/update the CIDR
-  # based on the current prefix from the DynamicPrefix resource
+  # The operator manages this - it will populate/update with start/stop addresses
+  # based on the calculated range from the DynamicPrefix resource
   blocks: []
 
   # You can still add static configuration
@@ -27,13 +34,59 @@ spec:
   #     io.cilium/lb-ipam: ipv6
 
 ---
-# Cilium LoadBalancer IP Pool for DMZ services
+# Multiple pools using different address ranges
+apiVersion: cilium.io/v2alpha1
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: ipv6-metallb
+  annotations:
+    dynamic-prefix.io/name: multi-range
+    dynamic-prefix.io/address-range: metallb
+spec:
+  blocks: []
+  serviceSelector:
+    matchLabels:
+      metallb.universe.tf/address-pool: ipv6
+
+---
+apiVersion: cilium.io/v2alpha1
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: ipv6-egress
+  annotations:
+    dynamic-prefix.io/name: multi-range
+    dynamic-prefix.io/address-range: egress
+spec:
+  blocks: []
+  serviceSelector:
+    matchLabels:
+      egress: "true"
+
+# =============================================================================
+# Mode 2: Subnet Examples (Advanced)
+# =============================================================================
+# Use dynamic-prefix.io/subnet to reference a subnet (CIDR-based).
+
+---
+# Cilium LoadBalancer IP Pool using subnet (Mode 2)
+apiVersion: cilium.io/v2alpha1
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: ipv6-advanced-lb
+  annotations:
+    dynamic-prefix.io/name: advanced-ipv6
+    dynamic-prefix.io/subnet: loadbalancers
+spec:
+  blocks: []
+
+---
+# Cilium LoadBalancer IP Pool for DMZ services (Mode 2)
 apiVersion: cilium.io/v2alpha1
 kind: CiliumLoadBalancerIPPool
 metadata:
   name: ipv6-dmz
   annotations:
-    dynamic-prefix.io/name: home-ipv6
+    dynamic-prefix.io/name: advanced-ipv6
     dynamic-prefix.io/subnet: dmz
 spec:
   blocks: []
@@ -41,18 +94,36 @@ spec:
     matchLabels:
       zone: dmz
 
+# =============================================================================
+# CIDRGroup Examples (for Network Policies)
+# =============================================================================
+# CIDRGroups only support CIDR format, so they use the approximate CIDR
+# from address ranges or exact CIDR from subnets.
+
 ---
-# CiliumCIDRGroup for network policies
-# Use this to allow/deny traffic from your dynamic prefix
-apiVersion: cilium.io/v2
+# CiliumCIDRGroup for network policies using address range
+# Note: Uses the approximate CIDR that contains the range
+apiVersion: cilium.io/v2alpha1
+kind: CiliumCIDRGroup
+metadata:
+  name: lb-network
+  annotations:
+    dynamic-prefix.io/name: home-ipv6
+    dynamic-prefix.io/address-range: loadbalancers
+spec:
+  # The operator manages this
+  externalCIDRs: []
+
+---
+# CiliumCIDRGroup using the full current prefix
+apiVersion: cilium.io/v2alpha1
 kind: CiliumCIDRGroup
 metadata:
   name: home-network
   annotations:
     dynamic-prefix.io/name: home-ipv6
-    dynamic-prefix.io/subnet: all  # Use the full prefix
+    # No subnet or address-range = use currentPrefix directly
 spec:
-  # The operator manages this
   externalCIDRs: []
 
 ---
@@ -72,19 +143,36 @@ spec:
         # References the operator-managed CIDRGroup
         - cidrGroupRef: home-network
 
----
+# =============================================================================
+# What the operator produces
+# =============================================================================
 # After the operator processes these, they'll look like:
 #
+# Mode 1 (Address Range) - uses start/stop for precise definition:
 # apiVersion: cilium.io/v2alpha1
 # kind: CiliumLoadBalancerIPPool
 # metadata:
 #   name: ipv6-loadbalancers
 #   annotations:
 #     dynamic-prefix.io/name: home-ipv6
-#     dynamic-prefix.io/subnet: loadbalancers
-#     dynamic-prefix.io/last-sync: "2025-01-03T10:00:00Z"
+#     dynamic-prefix.io/address-range: loadbalancers
+#     dynamic-prefix.io/last-sync: "2026-01-23T10:00:00Z"
 # spec:
 #   blocks:
-#     - cidr: "2001:db8:1234:ab00::1000/120"  # Populated by operator
+#     - start: "2001:db8:abcd:1:f000::"
+#       stop: "2001:db8:abcd:1:ffff:ffff:ffff:ffff"
 #
-# When the prefix changes, the operator automatically updates the CIDR.
+# Mode 2 (Subnet) - uses CIDR:
+# apiVersion: cilium.io/v2alpha1
+# kind: CiliumLoadBalancerIPPool
+# metadata:
+#   name: ipv6-advanced-lb
+#   annotations:
+#     dynamic-prefix.io/name: advanced-ipv6
+#     dynamic-prefix.io/subnet: loadbalancers
+#     dynamic-prefix.io/last-sync: "2026-01-23T10:00:00Z"
+# spec:
+#   blocks:
+#     - cidr: "2001:db8:1234:ff::/64"
+#
+# When the prefix changes, the operator automatically updates the pool.

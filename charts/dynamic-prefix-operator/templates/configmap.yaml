@@ -90,10 +90,17 @@ data:
           {{- toYaml .Values.watch.service.annotationSelector | nindent 10 }}
         {{- end }}
 
+    # Prefix acquisition settings
+    prefixAcquisition:
+      mode: {{ .Values.prefixAcquisition.mode | quote }}
+      interface: {{ .Values.prefixAcquisition.interface | quote }}
+      dhcpv6pd:
+        requestedPrefixLength: {{ .Values.prefixAcquisition.dhcpv6pd.requestedPrefixLength }}
+      routerAdvertisement:
+        enabled: {{ .Values.prefixAcquisition.routerAdvertisement.enabled }}
+
     # DynamicPrefix default settings
     dynamicPrefix:
       transition:
         drainPeriodMinutes: {{ .Values.dynamicPrefix.transition.drainPeriodMinutes }}
         maxPrefixHistory: {{ .Values.dynamicPrefix.transition.maxPrefixHistory }}
-      dhcpv6pd:
-        requestedPrefixLength: {{ .Values.dynamicPrefix.dhcpv6pd.requestedPrefixLength }}

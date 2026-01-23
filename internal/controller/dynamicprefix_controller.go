@@ -146,7 +146,7 @@ func (r *DynamicPrefixReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		dp.Status.LeaseExpiresAt = &expiresAt
 	}
 
-	// Calculate subnets
+	// Calculate subnets (Mode 2)
 	subnets, err := r.calculateSubnets(currentPrefix.Network, dp.Spec.Subnets)
 	if err != nil {
 		log.Error(err, "Failed to calculate subnets")
@@ -154,8 +154,21 @@ func (r *DynamicPrefixReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			"SubnetCalculationFailed", err.Error())
 	} else {
 		dp.Status.Subnets = subnets
-		r.setCondition(&dp, dynamicprefixiov1alpha1.ConditionTypeDegraded, metav1.ConditionFalse,
-			"Healthy", "DynamicPrefix is operating normally")
+	}
+
+	// Calculate address ranges (Mode 1)
+	addressRanges, err := r.calculateAddressRanges(currentPrefix.Network, dp.Spec.AddressRanges)
+	if err != nil {
+		log.Error(err, "Failed to calculate address ranges")
+		r.setCondition(&dp, dynamicprefixiov1alpha1.ConditionTypeDegraded, metav1.ConditionTrue,
+			"AddressRangeCalculationFailed", err.Error())
+	} else {
+		dp.Status.AddressRanges = addressRanges
+		// Only set healthy if subnets also succeeded
+		if subnets != nil || len(dp.Spec.Subnets) == 0 {
+			r.setCondition(&dp, dynamicprefixiov1alpha1.ConditionTypeDegraded, metav1.ConditionFalse,
+				"Healthy", "DynamicPrefix is operating normally")
+		}
 	}
 
 	// Set prefix acquired condition
@@ -252,6 +265,41 @@ func (r *DynamicPrefixReconciler) calculateSubnets(basePrefix netip.Prefix, spec
 		result[i] = dynamicprefixiov1alpha1.SubnetStatus{
 			Name: s.Name,
 			CIDR: s.CIDR.String(),
+		}
+	}
+
+	return result, nil
+}
+
+// calculateAddressRanges calculates address ranges from the base prefix (Mode 1)
+func (r *DynamicPrefixReconciler) calculateAddressRanges(basePrefix netip.Prefix, specs []dynamicprefixiov1alpha1.AddressRangeSpec) ([]dynamicprefixiov1alpha1.AddressRangeStatus, error) {
+	if len(specs) == 0 {
+		return nil, nil
+	}
+
+	configs := make([]prefix.AddressRangeConfig, len(specs))
+	for i, spec := range specs {
+		configs[i] = prefix.AddressRangeConfig{
+			Name:  spec.Name,
+			Start: spec.Start,
+			End:   spec.End,
+		}
+	}
+
+	ranges, err := prefix.CalculateAddressRanges(basePrefix, configs)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]dynamicprefixiov1alpha1.AddressRangeStatus, len(ranges))
+	for i, ar := range ranges {
+		// Calculate an approximate CIDR for compatibility
+		cidr := prefix.RangeToCIDR(ar.Start, ar.End)
+		result[i] = dynamicprefixiov1alpha1.AddressRangeStatus{
+			Name:  ar.Name,
+			Start: ar.Start.String(),
+			End:   ar.End.String(),
+			CIDR:  cidr.String(),
 		}
 	}
 
