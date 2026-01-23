@@ -75,9 +75,9 @@ spec:
 
   addressRanges:
     - name: loadbalancers
-      # Reserve the last 4096 addresses of the /64
-      startOffset: "::f000:0:0:0"
-      endOffset: "::ffff:ffff:ffff:ffff"
+      # Reserve the last portion of the /64
+      start: "::f000:0:0:0"
+      end: "::ffff:ffff:ffff:ffff"
 ```
 
 ### Pros
