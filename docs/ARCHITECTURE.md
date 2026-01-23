@@ -37,16 +37,17 @@
 │   │  ┌─────────────────────────────────────────────────────────────────┐   │ │
 │   │  │                      Controllers                                 │   │ │
 │   │  │                                                                  │   │ │
-│   │  │  DynamicPrefix Controller        Pool Sync Controller            │   │ │
-│   │  │  • Manages prefix lifecycle      • Watches annotated pools       │   │ │
-│   │  │  • Calculates address ranges     • Updates CIDRs on change       │   │ │
-│   │  │  • Updates CR status             • Handles multiple pool types   │   │ │
-│   │  │         │                                │                       │   │ │
-│   │  │         ▼                                ▼                       │   │ │
-│   │  │  ┌────────────────┐        ┌─────────────────────────────────┐  │   │ │
-│   │  │  │ DynamicPrefix  │        │ Pools with annotations:         │  │   │ │
-│   │  │  │ CR (status)    │◄───────│ dynamic-prefix.io/name: xxx     │  │   │ │
-│   │  │  └────────────────┘        └─────────────────────────────────┘  │   │ │
+│   │  │  DynamicPrefix        Pool Sync           Service Sync          │   │ │
+│   │  │  Controller           Controller          Controller (HA)        │   │ │
+│   │  │  • Manages prefix     • Watches pools     • Watches Services     │   │ │
+│   │  │  • Calcs ranges       • Updates CIDRs     • Sets multi-IP        │   │ │
+│   │  │  • Updates status     • Multi-block       • Sets DNS target      │   │ │
+│   │  │         │                   │                    │               │   │ │
+│   │  │         ▼                   ▼                    ▼               │   │ │
+│   │  │  ┌────────────────┐  ┌──────────────────┐  ┌─────────────────┐  │   │ │
+│   │  │  │ DynamicPrefix  │  │ Annotated Pools  │  │ LB Services     │  │   │ │
+│   │  │  │ CR (status)    │◄─│ dynamic-prefix.io│  │ (HA mode only)  │  │   │ │
+│   │  │  └────────────────┘  └──────────────────┘  └─────────────────┘  │   │ │
 │   │  └─────────────────────────────────────────────────────────────────┘   │ │
 │   └────────────────────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────────────────────┘
@@ -151,7 +152,12 @@ Operator                        Upstream Router
 - Watches for pools with `dynamic-prefix.io/*` annotations
 - Looks up referenced DynamicPrefix
 - Updates pool spec from DynamicPrefix status
+- Builds multiple blocks for current prefix + historical prefixes
 - Re-reconciles when DynamicPrefix changes
+
+**Multi-Block Support:**
+
+When a prefix changes, pools retain blocks for both the current and historical prefixes (up to `maxPrefixHistory`). This ensures existing Services keep their IPs while new Services get IPs from the current prefix.
 
 **Annotation-Based Binding:**
 
@@ -171,6 +177,30 @@ This follows the [1Password Operator](https://github.com/1Password/onepassword-o
 - Simpler than explicit binding CRDs
 - Pools are self-documenting
 - No orphaned resources
+
+#### Service Sync Controller (HA Mode)
+
+**Responsibilities:**
+- Watches LoadBalancer Services with `dynamic-prefix.io/name` annotation
+- Only active when DynamicPrefix has `transition.mode: ha`
+- Sets `lbipam.cilium.io/ips` with all active IPs (current + historical)
+- Sets `external-dns.alpha.kubernetes.io/target` with current IP only
+
+**How HA Mode Works:**
+
+```yaml
+# When prefix changes from A to B, Service annotations become:
+metadata:
+  annotations:
+    lbipam.cilium.io/ips: "2001:db8:B::1,2001:db8:A::1"  # Both IPs
+    external-dns.alpha.kubernetes.io/target: "2001:db8:B::1"  # New IP only
+```
+
+**Benefits:**
+- Zero-downtime during prefix transitions
+- Old connections continue working (both IPs active)
+- New DNS queries return new IP only
+- Gradual migration as clients reconnect
 
 ## Data Flow
 
@@ -197,15 +227,30 @@ This follows the [1Password Operator](https://github.com/1Password/onepassword-o
 6. Pool is now in sync
 ```
 
-### Prefix Change Flow
+### Prefix Change Flow (Simple Mode)
 
 ```
 1. RA monitor receives new prefix
-2. DynamicPrefix controller updates status
+2. DynamicPrefix controller updates status (adds to history)
 3. Pool sync controller sees status change
 4. Finds all pools referencing this DynamicPrefix
-5. Updates each pool with new address range
-6. external-dns sees new LB IPs, updates DNS
+5. Adds new block to each pool (keeps historical blocks)
+6. Existing Services keep old IPs, new Services get new IPs
+7. external-dns sees new LB IPs, updates DNS
+```
+
+### Prefix Change Flow (HA Mode)
+
+```
+1. RA monitor receives new prefix
+2. DynamicPrefix controller updates status (adds to history)
+3. Pool sync controller updates pools with multiple blocks
+4. Service sync controller finds annotated LoadBalancer Services
+5. Calculates corresponding IPs in new and old prefixes
+6. Sets lbipam.cilium.io/ips = "new-ip,old-ip"
+7. Sets external-dns.alpha.kubernetes.io/target = "new-ip"
+8. Service now has both IPs, DNS points to new only
+9. Old connections work, new clients get new IP via DNS
 ```
 
 ## Custom Resource Definition
@@ -219,6 +264,9 @@ This follows the [1Password Operator](https://github.com/1Password/onepassword-o
 - `addressRanges`: Ranges within the /64 (Mode 1)
 - `subnets`: How to subdivide the prefix (Mode 2)
 - `transition`: Graceful transition settings
+  - `mode`: `simple` (default) or `ha` (high availability with multi-IP Services)
+  - `maxPrefixHistory`: Number of historical prefixes to retain (default: 2)
+  - `drainPeriodMinutes`: How long to keep old prefix active
 
 **Status:**
 - `currentPrefix`: Currently active prefix
@@ -276,6 +324,7 @@ securityContext:
 Minimal permissions:
 - Read/write DynamicPrefix CRs
 - Update Cilium pools (only annotated ones)
+- Read/update Services (for HA mode)
 - Create events
 - Leader election
 

@@ -170,6 +170,61 @@ spec:
       prefixLength: 64
 ```
 
+## Graceful Prefix Transitions
+
+When your ISP changes your prefix, the operator supports two transition modes to minimize service disruption:
+
+### Simple Mode (Default)
+
+Keeps multiple address blocks in pools during transitions. Services retain their old IPs until the historical blocks are removed.
+
+```yaml
+spec:
+  transition:
+    mode: simple           # Default
+    maxPrefixHistory: 2    # Keep 2 previous prefixes in pool blocks
+```
+
+**How it works:**
+1. Prefix changes from A → B
+2. Pool now has blocks for both prefix A and B
+3. Existing services keep their prefix-A IPs
+4. New services get prefix-B IPs
+5. After another prefix change (B → C), oldest block (A) is dropped
+
+### HA Mode (High Availability)
+
+For zero-downtime transitions, HA mode manages both LoadBalancer IPs and DNS targeting:
+
+```yaml
+spec:
+  transition:
+    mode: ha
+    maxPrefixHistory: 2
+```
+
+**How it works:**
+1. Prefix changes from A → B
+2. Service gets **both** IPs via `lbipam.cilium.io/ips` annotation
+3. DNS points to **new IP only** via `external-dns.alpha.kubernetes.io/target`
+4. Old connections continue working (both IPs active on Service)
+5. New clients connect to new IP via DNS
+
+```yaml
+# HA Mode result on Service:
+annotations:
+  lbipam.cilium.io/ips: "2001:db8:new::1,2001:db8:old::1"  # Both IPs active
+  external-dns.alpha.kubernetes.io/target: "2001:db8:new::1"  # DNS → new only
+```
+
+### Annotations for HA Mode Services
+
+| Annotation | Description |
+|------------|-------------|
+| `dynamic-prefix.io/name` | Name of the DynamicPrefix CR (required) |
+| `dynamic-prefix.io/service-address-range` | Which address range for IP calculation |
+| `dynamic-prefix.io/service-subnet` | Which subnet for IP calculation |
+
 ## Supported Annotations
 
 Add these annotations to Cilium resources to have them managed by the operator:
@@ -209,8 +264,9 @@ spec:
 
   # Transition settings
   transition:
+    mode: simple            # "simple" (default) or "ha" for high availability
     drainPeriodMinutes: 60  # Keep old prefix info during transitions
-    maxPrefixHistory: 2
+    maxPrefixHistory: 2     # Number of historical prefixes to retain in pool blocks
 ```
 
 ### Status
@@ -245,16 +301,24 @@ When your ISP changes your prefix:
 
 1. **Detection**: The RA receiver detects the new prefix within seconds
 2. **Status Update**: DynamicPrefix status is updated with new prefix and calculated ranges
-3. **Pool Sync**: All annotated Cilium pools are updated in-place (same object, new values)
-4. **DNS Update**: external-dns (if configured) sees new LoadBalancer IPs and updates records
+3. **Pool Sync**: All annotated Cilium pools are updated with both old and new blocks
+4. **Service Sync** (HA mode): Services get both IPs, DNS points to new IP only
+5. **DNS Update**: external-dns updates records based on Service IPs or target override
 
-**Important**: Active TCP connections using old IPs will break. This is unavoidable when the upstream prefix changes. The operator helps by:
-- Detecting changes quickly
-- Updating pools immediately so new connections use new IPs
-- Keeping prefix history for debugging/audit
+### Simple Mode (Default)
+- Pools contain multiple blocks (current + historical prefixes)
+- Existing Services keep their old IPs until pool blocks are pruned
+- New Services get IPs from the current prefix block
+
+### HA Mode
+- Services are updated with **all** active IPs (old + new)
+- DNS target annotation ensures new clients get the new IP
+- Old connections continue working until they naturally close
+- Zero-downtime for properly configured setups
 
 **Recommendations**:
 - Use short DNS TTLs (60-300s) so clients get new IPs quickly
+- Use HA mode if you need zero-downtime during prefix transitions
 - Ensure your applications handle reconnection gracefully
 - Monitor the `PrefixAcquired` condition for alerting
 
@@ -265,6 +329,8 @@ When your ISP changes your prefix:
 - [x] Address range mode (within /64)
 - [x] Cilium LB-IPAM integration
 - [x] Cilium CIDRGroup integration
+- [x] Graceful prefix transitions (simple mode)
+- [x] HA mode with multi-IP Services and DNS targeting
 - [ ] DHCPv6-PD client (act as PD client)
 - [ ] BGP integration for subnet mode
 - [ ] Calico IPPool backend

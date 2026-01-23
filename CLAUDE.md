@@ -35,12 +35,17 @@ make test-e2e         # Run e2e tests with Kind cluster
 
 5. **Subnet Calculation** (`internal/prefix/subnet.go`): Carves subnets from received prefix using offset/prefixLength for Mode 2 (advanced, requires BGP).
 
+6. **PoolSyncReconciler** (`internal/controller/poolsync_controller.go`): Syncs annotated Cilium pools with calculated address ranges/subnets. Supports multi-block mode for graceful transitions, keeping blocks for current prefix plus historical prefixes.
+
+7. **ServiceSyncReconciler** (`internal/controller/servicesync_controller.go`): HA mode controller that manages LoadBalancer Services. Sets `lbipam.cilium.io/ips` for multi-IP assignment and `external-dns.alpha.kubernetes.io/target` for DNS targeting.
+
 ### Data Flow
 
 ```
 ISP/Router → DHCPv6-PD/RA Receiver → DynamicPrefix CR (status.currentPrefix)
-    → Pool Controller (watches annotated pools)
-    → CiliumLoadBalancerIPPool/CiliumCIDRGroup (specs updated)
+    → Pool Controller (watches annotated pools, builds multi-block configs)
+    → CiliumLoadBalancerIPPool/CiliumCIDRGroup (specs updated with current + historical blocks)
+    → Service Controller (HA mode: manages Service IPs and DNS targeting)
 ```
 
 ### Pool Integration
@@ -51,6 +56,11 @@ Uses annotation-based binding (inspired by 1Password Operator):
 - `dynamic-prefix.io/subnet`: Specifies which subnet to use (Mode 2, advanced)
 
 The operator watches annotated Cilium resources and auto-updates their `spec.blocks` (with start/stop addresses) or `spec.externalCIDRs`.
+
+### Transition Modes
+
+- **Simple mode** (default): Pools contain multiple blocks for current + historical prefixes. Services keep old IPs until blocks are pruned.
+- **HA mode**: ServiceSync controller manages multi-IP Services with DNS targeting for zero-downtime transitions.
 
 ## Testing
 

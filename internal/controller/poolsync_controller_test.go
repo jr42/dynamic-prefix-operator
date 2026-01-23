@@ -36,7 +36,8 @@ var _ = Describe("PoolSync Controller", func() {
 			poolName   = "test-pool"
 			dpName     = "test-dp"
 			subnetName = "lb-pool"
-			subnetCIDR = "2001:db8:1::/64"
+			// Expected CIDR is calculated from base prefix 2001:db8::/48 with offset 0 and prefixLength 64
+			subnetCIDR = "2001:db8::/64"
 		)
 
 		ctx := context.Background()
@@ -57,6 +58,7 @@ var _ = Describe("PoolSync Controller", func() {
 					Subnets: []dynamicprefixiov1alpha1.SubnetSpec{
 						{
 							Name:         subnetName,
+							Offset:       0, // First /64 subnet
 							PrefixLength: 64,
 						},
 					},
@@ -138,7 +140,8 @@ var _ = Describe("PoolSync Controller", func() {
 			groupName  = "test-cidr-group"
 			dpName     = "test-dp-cidr"
 			subnetName = "egress"
-			subnetCIDR = "2001:db8:2::/64"
+			// Expected CIDR is calculated from base prefix 2001:db8::/48 with offset 0 and prefixLength 64
+			subnetCIDR = "2001:db8::/64"
 		)
 
 		ctx := context.Background()
@@ -159,6 +162,7 @@ var _ = Describe("PoolSync Controller", func() {
 					Subnets: []dynamicprefixiov1alpha1.SubnetSpec{
 						{
 							Name:         subnetName,
+							Offset:       0, // First /64 subnet
 							PrefixLength: 64,
 						},
 					},

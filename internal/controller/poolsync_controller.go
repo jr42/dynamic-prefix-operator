@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -34,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dynamicprefixiov1alpha1 "github.com/jr42/dynamic-prefix-operator/api/v1alpha1"
+	"github.com/jr42/dynamic-prefix-operator/internal/prefix"
 )
 
 const (
@@ -126,51 +128,16 @@ func (r *PoolSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	// Determine the pool configuration based on annotations
-	// Address range (Mode 1) takes precedence as it provides precise start/end addresses
-	var poolConfig poolConfiguration
-	if hasAddressRange && addressRangeName != "" {
-		// Look for specific address range
-		for _, ar := range dp.Status.AddressRanges {
-			if ar.Name == addressRangeName {
-				poolConfig = poolConfiguration{
-					useAddressRange: true,
-					start:           ar.Start,
-					end:             ar.End,
-					cidr:            ar.CIDR, // Approximate CIDR for fallback
-				}
-				break
-			}
-		}
-		if poolConfig.start == "" {
-			log.Info("Address range not found in DynamicPrefix status", "addressRange", addressRangeName)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-	} else if hasSubnet && subnetName != "" {
-		// Look for specific subnet (Mode 2)
-		for _, s := range dp.Status.Subnets {
-			if s.Name == subnetName {
-				poolConfig = poolConfiguration{
-					useAddressRange: false,
-					cidr:            s.CIDR,
-				}
-				break
-			}
-		}
-		if poolConfig.cidr == "" {
-			log.Info("Subnet not found in DynamicPrefix status", "subnet", subnetName)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-	} else {
-		// Use the main prefix
-		if dp.Status.CurrentPrefix == "" {
-			log.Info("DynamicPrefix has no current prefix")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-		poolConfig = poolConfiguration{
-			useAddressRange: false,
-			cidr:            dp.Status.CurrentPrefix,
-		}
+	// Build pool configurations for current prefix and historical prefixes
+	configs, err := r.buildPoolConfigurations(ctx, &dp, hasAddressRange, addressRangeName, hasSubnet, subnetName)
+	if err != nil {
+		log.Info("Failed to build pool configurations", "error", err.Error())
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if len(configs) == 0 {
+		log.Info("No pool configurations generated")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	// Update the pool based on its type
@@ -179,10 +146,10 @@ func (r *PoolSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	switch gvk.Kind {
 	case "CiliumLoadBalancerIPPool":
-		updateErr = r.updateLoadBalancerIPPool(ctx, pool, poolConfig)
+		updateErr = r.updateLoadBalancerIPPool(ctx, pool, configs)
 	case "CiliumCIDRGroup":
 		// CIDRGroup doesn't support start/end ranges, use CIDR only
-		updateErr = r.updateCIDRGroup(ctx, pool, poolConfig.cidr)
+		updateErr = r.updateCIDRGroup(ctx, pool, configs)
 	default:
 		log.Info("Unknown pool type", "kind", gvk.Kind)
 		return ctrl.Result{}, nil
@@ -193,37 +160,205 @@ func (r *PoolSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	if poolConfig.useAddressRange {
-		log.Info("Pool synced successfully", "pool", req.Name, "start", poolConfig.start, "end", poolConfig.end)
-	} else {
-		log.Info("Pool synced successfully", "pool", req.Name, "cidr", poolConfig.cidr)
-	}
+	log.Info("Pool synced successfully", "pool", req.Name, "blockCount", len(configs))
 	return ctrl.Result{}, nil
 }
 
-// updateLoadBalancerIPPool updates a CiliumLoadBalancerIPPool with the new configuration.
+// buildPoolConfigurations builds pool configurations for current prefix and historical prefixes.
+func (r *PoolSyncReconciler) buildPoolConfigurations(
+	ctx context.Context,
+	dp *dynamicprefixiov1alpha1.DynamicPrefix,
+	hasAddressRange bool,
+	addressRangeName string,
+	hasSubnet bool,
+	subnetName string,
+) ([]poolConfiguration, error) {
+	log := logf.FromContext(ctx)
+	var configs []poolConfiguration
+
+	// Get max history count
+	maxHistory := 2 // Default
+	if dp.Spec.Transition != nil && dp.Spec.Transition.MaxPrefixHistory > 0 {
+		maxHistory = dp.Spec.Transition.MaxPrefixHistory
+	}
+
+	// Build configuration for current prefix
+	if dp.Status.CurrentPrefix == "" {
+		return nil, fmt.Errorf("DynamicPrefix has no current prefix")
+	}
+
+	if hasAddressRange && addressRangeName != "" {
+		// Mode 1: Address ranges
+		// Find the address range spec
+		var rangeSpec *dynamicprefixiov1alpha1.AddressRangeSpec
+		for i := range dp.Spec.AddressRanges {
+			if dp.Spec.AddressRanges[i].Name == addressRangeName {
+				rangeSpec = &dp.Spec.AddressRanges[i]
+				break
+			}
+		}
+		if rangeSpec == nil {
+			return nil, fmt.Errorf("address range spec %q not found", addressRangeName)
+		}
+
+		// Calculate for current prefix
+		currentConfig, err := r.calculateAddressRangeConfig(dp.Status.CurrentPrefix, rangeSpec)
+		if err != nil {
+			return nil, fmt.Errorf("failed to calculate address range for current prefix: %w", err)
+		}
+		configs = append(configs, currentConfig)
+
+		// Calculate for historical prefixes
+		for i, histEntry := range dp.Status.History {
+			if i >= maxHistory {
+				break
+			}
+			histConfig, err := r.calculateAddressRangeConfig(histEntry.Prefix, rangeSpec)
+			if err != nil {
+				log.V(1).Info("Failed to calculate address range for historical prefix",
+					"prefix", histEntry.Prefix, "error", err.Error())
+				continue
+			}
+			configs = append(configs, histConfig)
+		}
+	} else if hasSubnet && subnetName != "" {
+		// Mode 2: Subnets
+		// Find the subnet spec
+		var subnetSpec *dynamicprefixiov1alpha1.SubnetSpec
+		for i := range dp.Spec.Subnets {
+			if dp.Spec.Subnets[i].Name == subnetName {
+				subnetSpec = &dp.Spec.Subnets[i]
+				break
+			}
+		}
+		if subnetSpec == nil {
+			return nil, fmt.Errorf("subnet spec %q not found", subnetName)
+		}
+
+		// Calculate for current prefix
+		currentConfig, err := r.calculateSubnetConfig(dp.Status.CurrentPrefix, subnetSpec)
+		if err != nil {
+			return nil, fmt.Errorf("failed to calculate subnet for current prefix: %w", err)
+		}
+		configs = append(configs, currentConfig)
+
+		// Calculate for historical prefixes
+		for i, histEntry := range dp.Status.History {
+			if i >= maxHistory {
+				break
+			}
+			histConfig, err := r.calculateSubnetConfig(histEntry.Prefix, subnetSpec)
+			if err != nil {
+				log.V(1).Info("Failed to calculate subnet for historical prefix",
+					"prefix", histEntry.Prefix, "error", err.Error())
+				continue
+			}
+			configs = append(configs, histConfig)
+		}
+	} else {
+		// Use the main prefix directly
+		configs = append(configs, poolConfiguration{
+			useAddressRange: false,
+			cidr:            dp.Status.CurrentPrefix,
+		})
+
+		// Add historical prefixes
+		for i, histEntry := range dp.Status.History {
+			if i >= maxHistory {
+				break
+			}
+			configs = append(configs, poolConfiguration{
+				useAddressRange: false,
+				cidr:            histEntry.Prefix,
+			})
+		}
+	}
+
+	return configs, nil
+}
+
+// calculateAddressRangeConfig calculates a pool configuration from a prefix and address range spec.
+func (r *PoolSyncReconciler) calculateAddressRangeConfig(
+	prefixStr string,
+	rangeSpec *dynamicprefixiov1alpha1.AddressRangeSpec,
+) (poolConfiguration, error) {
+	basePrefix, err := netip.ParsePrefix(prefixStr)
+	if err != nil {
+		return poolConfiguration{}, fmt.Errorf("invalid prefix %q: %w", prefixStr, err)
+	}
+
+	cfg := prefix.AddressRangeConfig{
+		Name:  rangeSpec.Name,
+		Start: rangeSpec.Start,
+		End:   rangeSpec.End,
+	}
+
+	ar, err := prefix.CalculateAddressRange(basePrefix, cfg)
+	if err != nil {
+		return poolConfiguration{}, err
+	}
+
+	return poolConfiguration{
+		useAddressRange: true,
+		start:           ar.Start.String(),
+		end:             ar.End.String(),
+		cidr:            prefix.RangeToCIDR(ar.Start, ar.End).String(),
+	}, nil
+}
+
+// calculateSubnetConfig calculates a pool configuration from a prefix and subnet spec.
+func (r *PoolSyncReconciler) calculateSubnetConfig(
+	prefixStr string,
+	subnetSpec *dynamicprefixiov1alpha1.SubnetSpec,
+) (poolConfiguration, error) {
+	basePrefix, err := netip.ParsePrefix(prefixStr)
+	if err != nil {
+		return poolConfiguration{}, fmt.Errorf("invalid prefix %q: %w", prefixStr, err)
+	}
+
+	cfg := prefix.SubnetConfig{
+		Name:         subnetSpec.Name,
+		Offset:       subnetSpec.Offset,
+		PrefixLength: subnetSpec.PrefixLength,
+	}
+
+	subnet, err := prefix.CalculateSubnet(basePrefix, cfg)
+	if err != nil {
+		return poolConfiguration{}, err
+	}
+
+	return poolConfiguration{
+		useAddressRange: false,
+		cidr:            subnet.CIDR.String(),
+	}, nil
+}
+
+// updateLoadBalancerIPPool updates a CiliumLoadBalancerIPPool with the new configurations.
 // It supports both CIDR-based blocks (Mode 2) and start/end address ranges (Mode 1).
-func (r *PoolSyncReconciler) updateLoadBalancerIPPool(ctx context.Context, pool *unstructured.Unstructured, config poolConfiguration) error {
+// Multiple blocks are created for current prefix plus historical prefixes.
+func (r *PoolSyncReconciler) updateLoadBalancerIPPool(ctx context.Context, pool *unstructured.Unstructured, configs []poolConfiguration) error {
 	// CiliumLoadBalancerIPPool spec.blocks is a list of IP blocks
 	// Format can be either:
 	// - spec.blocks[].cidr for CIDR-based allocation
 	// - spec.blocks[].start + spec.blocks[].stop for address range (Cilium uses "stop" not "end")
-	var block map[string]interface{}
+	blocks := make([]interface{}, 0, len(configs))
 
-	if config.useAddressRange && config.start != "" && config.end != "" {
-		// Use start/stop for precise address range (Mode 1)
-		block = map[string]interface{}{
-			"start": config.start,
-			"stop":  config.end,
+	for _, config := range configs {
+		var block map[string]interface{}
+		if config.useAddressRange && config.start != "" && config.end != "" {
+			// Use start/stop for precise address range (Mode 1)
+			block = map[string]interface{}{
+				"start": config.start,
+				"stop":  config.end,
+			}
+		} else {
+			// Use CIDR (Mode 2 or fallback)
+			block = map[string]interface{}{
+				"cidr": config.cidr,
+			}
 		}
-	} else {
-		// Use CIDR (Mode 2 or fallback)
-		block = map[string]interface{}{
-			"cidr": config.cidr,
-		}
+		blocks = append(blocks, block)
 	}
-
-	blocks := []interface{}{block}
 
 	if err := unstructured.SetNestedField(pool.Object, blocks, "spec", "blocks"); err != nil {
 		return fmt.Errorf("failed to set spec.blocks: %w", err)
@@ -235,10 +370,15 @@ func (r *PoolSyncReconciler) updateLoadBalancerIPPool(ctx context.Context, pool 
 	return r.Update(ctx, pool)
 }
 
-// updateCIDRGroup updates a CiliumCIDRGroup with the new CIDR.
-func (r *PoolSyncReconciler) updateCIDRGroup(ctx context.Context, pool *unstructured.Unstructured, cidr string) error {
+// updateCIDRGroup updates a CiliumCIDRGroup with the new CIDRs.
+// Multiple CIDRs are added for current prefix plus historical prefixes.
+func (r *PoolSyncReconciler) updateCIDRGroup(ctx context.Context, pool *unstructured.Unstructured, configs []poolConfiguration) error {
 	// CiliumCIDRGroup spec.externalCIDRs is a list of CIDR strings
-	externalCIDRs := []interface{}{cidr}
+	externalCIDRs := make([]interface{}, 0, len(configs))
+
+	for _, config := range configs {
+		externalCIDRs = append(externalCIDRs, config.cidr)
+	}
 
 	if err := unstructured.SetNestedField(pool.Object, externalCIDRs, "spec", "externalCIDRs"); err != nil {
 		return fmt.Errorf("failed to set spec.externalCIDRs: %w", err)

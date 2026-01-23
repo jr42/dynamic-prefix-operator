@@ -125,8 +125,27 @@ type SubnetSpec struct {
 	PrefixLength int `json:"prefixLength"`
 }
 
+// TransitionMode defines the transition behavior mode
+type TransitionMode string
+
+const (
+	// TransitionModeSimple keeps multiple blocks in pool; Services keep old IPs until block removed
+	TransitionModeSimple TransitionMode = "simple"
+
+	// TransitionModeHA keeps both old and new IPs on Service, with DNS pointing to new IP only
+	TransitionModeHA TransitionMode = "ha"
+)
+
 // TransitionSpec defines settings for graceful prefix transitions
 type TransitionSpec struct {
+	// Mode specifies the transition behavior.
+	// "simple" (default): Keep multiple blocks in pool, Services keep old IPs until block removed.
+	// "ha": Keep both old and new IPs on Service, DNS points to new IP only via external-dns annotation.
+	// +optional
+	// +kubebuilder:validation:Enum=simple;ha
+	// +kubebuilder:default=simple
+	Mode TransitionMode `json:"mode,omitempty"`
+
 	// DrainPeriodMinutes is how long to keep the old prefix active during transitions
 	// +optional
 	// +kubebuilder:default=60

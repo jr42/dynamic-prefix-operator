@@ -177,6 +177,16 @@ spec:
                     maximum: 10
                     minimum: 1
                     type: integer
+                  mode:
+                    default: simple
+                    description: |-
+                      Mode specifies the transition behavior.
+                      "simple" (default): Keep multiple blocks in pool, Services keep old IPs until block removed.
+                      "ha": Keep both old and new IPs on Service, DNS points to new IP only via external-dns annotation.
+                    enum:
+                    - simple
+                    - ha
+                    type: string
                 type: object
             required:
             - acquisition
