@@ -18,15 +18,14 @@ Many residential and SOHO ISPs assign IPv6 prefixes dynamically. These prefixes 
 - After DHCPv6 lease expiration
 - Randomly, because ISPs gonna ISP
 
-When your prefix changes from `2001:db8:1234::/56` to `2001:db8:5678::/56`, **everything breaks**:
+When your prefix changes from `2001:db8:1234::/64` to `2001:db8:5678::/64`, **everything breaks**:
 
 - **LoadBalancer IPs** become unreachable (Cilium LB-IPAM pools are static)
 - **DNS records** point to stale addresses
 - **Firewall rules** reference invalid CIDRs
 - **Network policies** stop matching traffic
-- **BGP announcements** advertise dead routes
 
-The "solution" many resort to? **NAT66** — taking the beautiful end-to-end transparency of IPv6 and bolting the same ugly NAT architecture that made IPv4 a nightmare. Your packets get rewritten, your logs become meaningless, and you've solved nothing.
+The "solution" many resort to? **NAT66** — taking the beautiful end-to-end transparency of IPv6 and bolting the same ugly NAT architecture that made IPv4 a nightmare.
 
 ### Why This Matters for Kubernetes
 
@@ -41,99 +40,154 @@ But all of this assumes **stable IP addressing**. Cloud providers give you stati
 
 **Dynamic Prefix Operator** bridges this gap by:
 
-1. **Receiving prefix delegations** via DHCPv6-PD — acting as a DHCPv6 client that receives prefixes from your upstream router
-2. **Monitoring prefix changes** through Router Advertisement (RA) observation as a fallback
-3. **Creating and updating Kubernetes resources** automatically when prefixes change
-4. **Coordinating DNS updates** through proper integration with external-dns
-5. **Managing graceful transitions** to minimize service disruption
+1. **Monitoring prefix changes** via Router Advertisement observation
+2. **Calculating address ranges** from the received prefix automatically
+3. **Updating Cilium resources** (LoadBalancerIPPool, CIDRGroup) when prefixes change
+4. **Managing graceful transitions** to minimize service disruption
+
+## Quick Start
+
+### 1. Install the operator
+
+```bash
+# Using Helm
+helm install dynamic-prefix-operator oci://ghcr.io/jr42/dynamic-prefix-operator/helm/dynamic-prefix-operator
+
+# Or using kubectl
+kubectl apply -f https://github.com/jr42/dynamic-prefix-operator/releases/latest/download/install.yaml
+```
+
+### 2. Create a DynamicPrefix with Address Ranges
+
+The recommended approach for home/SOHO: reserve a portion of your /64 that your router won't hand out via DHCPv6/SLAAC.
+
+```yaml
+apiVersion: dynamic-prefix.io/v1alpha1
+kind: DynamicPrefix
+metadata:
+  name: home-ipv6
+spec:
+  acquisition:
+    routerAdvertisement:
+      interface: eth0
+      enabled: true
+
+  # Reserve ::f000:0:0:0 through ::ffff:ffff:ffff:ffff for Kubernetes services
+  # Configure your router to NOT assign addresses in this range via SLAAC/DHCPv6
+  addressRanges:
+    - name: loadbalancers
+      start: "::f000:0:0:0"
+      end: "::ffff:ffff:ffff:ffff"
+```
+
+### 3. Create a Cilium pool that references it
+
+```yaml
+apiVersion: cilium.io/v2alpha1
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: ipv6-lb-pool
+  annotations:
+    dynamic-prefix.io/name: home-ipv6
+    dynamic-prefix.io/address-range: loadbalancers
+spec:
+  blocks: []  # Operator manages this
+```
+
+### 4. Watch the operator populate the pool
+
+```bash
+kubectl get ciliumloadbalancerippool ipv6-lb-pool -o yaml
+# spec.blocks now contains the actual address range from your prefix:
+# - start: "2001:db8:1234:0:f000::"
+#   stop: "2001:db8:1234:0:ffff:ffff:ffff:ffff"
+```
+
+When your prefix changes, the operator automatically updates all annotated pools.
 
 ## Architecture
 
 ```
                          Upstream Router / ISP
                                   │
-                                  │ DHCPv6-PD (delegates prefix)
+                                  │ Router Advertisement
                                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                     Dynamic Prefix Operator                         │
 │                                                                     │
 │  ┌─────────────────────┐      ┌─────────────────────────────────┐  │
-│  │   Prefix Receiver   │      │        Pool Generator           │  │
+│  │   Prefix Receiver   │      │     Pool Sync Controller        │  │
 │  │                     │      │                                 │  │
-│  │  • DHCPv6-PD Client │      │  Creates/updates pools that     │  │
-│  │  • RA Monitor       │─────▶│  reference DynamicPrefix:       │  │
-│  │  • Lease Manager    │      │                                 │  │
-│  │                     │      │  • CiliumLoadBalancerIPPool    │  │
-│  └─────────────────────┘      │  • CiliumCIDRGroup             │  │
-│           │                   │  • Future: Calico, MetalLB     │  │
+│  │  • RA Monitor       │─────▶│  Updates pools that reference   │  │
+│  │  • Prefix Detection │      │  DynamicPrefix via annotations: │  │
+│  │                     │      │                                 │  │
+│  └─────────────────────┘      │  • CiliumLoadBalancerIPPool    │  │
+│           │                   │  • CiliumCIDRGroup             │  │
 │           ▼                   └─────────────────────────────────┘  │
 │  ┌─────────────────────┐                     │                      │
 │  │  DynamicPrefix CR   │                     │                      │
 │  │                     │                     ▼                      │
 │  │  • Current prefix   │      ┌─────────────────────────────────┐  │
-│  │  • Allocated subnets│      │  Pools with annotation:         │  │
+│  │  • Address ranges   │      │  Pools with annotation:         │  │
 │  │  • Lease state      │      │  dynamic-prefix.io/name: xxx    │  │
 │  └─────────────────────┘      └─────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Key Features
+## Address Range Mode (Recommended)
 
-### DHCPv6 Prefix Delegation Client
+For most home/SOHO setups, you receive a /64 prefix from your ISP. The operator lets you **reserve a portion of that /64** for Kubernetes services.
 
-The operator acts as a DHCPv6-PD client, receiving delegated prefixes from your upstream router:
-- Receives prefix delegation from upstream (router/ISP)
-- Manages lease lifecycle (renew, rebind)
-- Handles prefix changes gracefully
-- Uses the well-maintained [insomniacslk/dhcp](https://github.com/insomniacslk/dhcp) library
+**How it works:**
+1. Configure your router to NOT hand out addresses in a specific range (e.g., `::f000:0:0:0` to `::ffff:ffff:ffff:ffff`)
+2. Tell the operator about this reserved range
+3. The operator monitors RAs for prefix changes and updates your Cilium pools with the full addresses
 
-### Router Advertisement Fallback
-
-For networks without DHCPv6-PD or as supplementary detection:
-- Monitors RAs using the [mdlayher/ndp](https://github.com/mdlayher/ndp) library
-- Detects prefix information from router advertisements
-- Validates prefix consistency across sources
-
-### Simple Binding Model (1Password-style)
-
-Inspired by the [1Password Operator](https://github.com/1Password/onepassword-operator), pools reference the DynamicPrefix via annotations — no separate binding resource needed:
+**Advantages:**
+- Works with standard /64 allocations
+- No BGP required
+- Simple router configuration (just exclude a range from DHCPv6/SLAAC)
 
 ```yaml
-apiVersion: cilium.io/v2alpha1
-kind: CiliumLoadBalancerIPPool
-metadata:
-  name: ipv6-pool
-  annotations:
-    # This pool is managed by the operator
-    dynamic-prefix.io/name: home-ipv6
-    dynamic-prefix.io/subnet: loadbalancers
 spec:
-  # CIDR is automatically populated and updated by the operator
-  blocks: []  # Managed by operator
+  addressRanges:
+    - name: loadbalancers
+      start: "::f000:0:0:0"        # Lower bound suffix
+      end: "::ffff:ffff:ffff:ffff"  # Upper bound suffix
 ```
 
-The operator watches for pools with the `dynamic-prefix.io/name` annotation and keeps them in sync with the referenced DynamicPrefix.
+## Subnet Mode (Advanced)
 
-### Extensible Pool Types
+If you receive a larger prefix (e.g., /56 or /48), you can carve out dedicated /64 subnets. This mode requires BGP to announce the subnets to your router.
 
-The operator can create and manage different pool types:
-- `CiliumLoadBalancerIPPool` — for Cilium LB-IPAM
-- `CiliumCIDRGroup` — for network policies
-- Future: Calico IPPool, MetalLB IPAddressPool
+> **Note:** BGP integration is planned but not yet implemented. Use Address Range mode for now.
 
-### Graceful Transition Management
+```yaml
+spec:
+  subnets:
+    - name: loadbalancers
+      offset: 0
+      prefixLength: 64
+```
 
-Minimizes disruption during prefix changes:
-- Maintains both old and new prefixes during transition
-- Configurable drain periods before removing old prefix
-- Coordinates with external-dns for DNS migration
-- Emits events and metrics for observability
+## Supported Annotations
 
-## Custom Resource Definition
+Add these annotations to Cilium resources to have them managed by the operator:
 
-### DynamicPrefix
+| Annotation | Description |
+|------------|-------------|
+| `dynamic-prefix.io/name` | Name of the DynamicPrefix CR to reference |
+| `dynamic-prefix.io/address-range` | Name of the address range to use (Mode 1) |
+| `dynamic-prefix.io/subnet` | Name of the subnet to use (Mode 2) |
 
-The single CRD representing a managed IPv6 prefix:
+## Supported Resources
+
+- **CiliumLoadBalancerIPPool** — for Cilium LB-IPAM (`spec.blocks` with start/stop)
+- **CiliumCIDRGroup** — for network policies (`spec.externalCIDRs`)
+
+## Configuration Reference
+
+### DynamicPrefix Spec
 
 ```yaml
 apiVersion: dynamic-prefix.io/v1alpha1
@@ -143,49 +197,33 @@ metadata:
 spec:
   # How to receive the prefix
   acquisition:
-    # Primary: Receive via DHCPv6 Prefix Delegation
-    dhcpv6pd:
-      # Interface where we receive the delegated prefix
-      interface: eth0
-      # Hint for requested prefix length (optional)
-      requestedPrefixLength: 60
-
-    # Fallback: Monitor Router Advertisements
     routerAdvertisement:
-      interface: eth0
+      interface: eth0    # Interface to monitor for RAs
       enabled: true
 
-  # Subnet allocation from the received prefix
-  # Offset is the subnet index: 0 = first subnet, 1 = second, etc.
-  subnets:
+  # Address ranges within the /64 (recommended for home/SOHO)
+  addressRanges:
     - name: loadbalancers
-      offset: 0             # First /120 subnet
-      prefixLength: 120     # /120 = 256 addresses
-
-    - name: dmz
-      offset: 1             # Second /112 subnet
-      prefixLength: 112
+      start: "::f000:0:0:0"
+      end: "::ffff:ffff:ffff:ffff"
 
   # Transition settings
   transition:
-    drainPeriodMinutes: 60  # Keep old prefix active during transition
+    drainPeriodMinutes: 60  # Keep old prefix info during transitions
     maxPrefixHistory: 2
+```
 
-  # What pool types to create for referencing pools
-  poolTypes:
-    ciliumLoadBalancerIPPool: true
-    ciliumCIDRGroup: true
+### Status
 
+```yaml
 status:
-  currentPrefix: "2001:db8:1234::/60"
-  prefixSource: "dhcpv6-pd"
-  leaseExpiresAt: "2025-01-04T10:00:00Z"
+  currentPrefix: "2001:db8:1234::/64"
+  prefixSource: "router-advertisement"
 
-  subnets:
+  addressRanges:
     - name: loadbalancers
-      cidr: "2001:db8:1234::/120"      # Offset 0 = first /120
-    - name: dmz
-      cidr: "2001:db8:1234::1:0/112"   # Offset 1 = second /112
+      start: "2001:db8:1234:0:f000::"
+      end: "2001:db8:1234:0:ffff:ffff:ffff:ffff"
 
   conditions:
     - type: PrefixAcquired
@@ -194,106 +232,43 @@ status:
       status: "True"
 ```
 
-## How It Works
+## Requirements
 
-1. **Create a DynamicPrefix** — defines where to receive the prefix and how to slice it into subnets
+- Kubernetes 1.28+
+- Cilium (for LB-IPAM pools)
+- `hostNetwork: true` for the operator pod (to see Router Advertisements)
+- `NET_RAW` capability (for raw ICMPv6 sockets)
 
-2. **Create pools with annotations** — pools reference the DynamicPrefix by name:
+## Prefix Change Behavior
 
-```yaml
-apiVersion: cilium.io/v2alpha1
-kind: CiliumLoadBalancerIPPool
-metadata:
-  name: external-services
-  annotations:
-    dynamic-prefix.io/name: home-ipv6      # Reference to DynamicPrefix
-    dynamic-prefix.io/subnet: loadbalancers # Which subnet to use
-spec:
-  blocks: []  # Operator manages this
-```
+When your ISP changes your prefix:
 
-3. **Operator keeps pools in sync** — when the prefix changes, the operator updates all referencing pools automatically
+1. **Detection**: The RA receiver detects the new prefix within seconds
+2. **Status Update**: DynamicPrefix status is updated with new prefix and calculated ranges
+3. **Pool Sync**: All annotated Cilium pools are updated in-place (same object, new values)
+4. **DNS Update**: external-dns (if configured) sees new LoadBalancer IPs and updates records
 
-4. **DNS updates automatically** — external-dns sees the new LoadBalancer IPs and updates DNS records
+**Important**: Active TCP connections using old IPs will break. This is unavoidable when the upstream prefix changes. The operator helps by:
+- Detecting changes quickly
+- Updating pools immediately so new connections use new IPs
+- Keeping prefix history for debugging/audit
 
-## Installation
-
-```bash
-# Using Helm (recommended)
-helm repo add dynamic-prefix-operator https://charts.example.com
-helm install dynamic-prefix-operator dynamic-prefix-operator/dynamic-prefix-operator
-
-# Using Kustomize
-kubectl apply -k https://github.com/jr42/dynamic-prefix-operator//config/default
-
-# Using kubectl
-kubectl apply -f https://github.com/jr42/dynamic-prefix-operator/releases/latest/download/install.yaml
-```
-
-## Quick Start
-
-1. Install the operator (see above)
-
-2. Create a DynamicPrefix:
-```yaml
-apiVersion: dynamic-prefix.io/v1alpha1
-kind: DynamicPrefix
-metadata:
-  name: home-ipv6
-spec:
-  acquisition:
-    dhcpv6pd:
-      interface: eth0
-  subnets:
-    - name: loadbalancers
-      offset: 0           # First /120 subnet
-      prefixLength: 120
-```
-
-3. Create a pool that references it:
-```yaml
-apiVersion: cilium.io/v2alpha1
-kind: CiliumLoadBalancerIPPool
-metadata:
-  name: ipv6-lb-pool
-  annotations:
-    dynamic-prefix.io/name: home-ipv6
-    dynamic-prefix.io/subnet: loadbalancers
-spec:
-  blocks: []
-```
-
-4. Watch the operator populate the pool:
-```bash
-kubectl get ciliumloadbalancerippool ipv6-lb-pool -o yaml
-# spec.blocks now contains the actual CIDR from your prefix
-```
-
-## Comparison with Alternatives
-
-| Feature | Dynamic Prefix Operator | k6u | Manual Script |
-|---------|------------------------|-----|---------------|
-| DHCPv6-PD Client | Yes | No (SLAAC only) | No |
-| Lease Management | Yes | No | No |
-| Cilium LB-IPAM | Yes | No (CIDRGroup only) | Yes |
-| Cilium CIDRGroup | Yes | Yes | No |
-| Graceful Transitions | Yes | No | No |
-| Multiple Pool Types | Yes | No | No |
-| Simple Annotation Binding | Yes | No | N/A |
-| Kubernetes Native | Yes | Yes | No |
-| Metrics/Observability | Yes | No | No |
+**Recommendations**:
+- Use short DNS TTLs (60-300s) so clients get new IPs quickly
+- Ensure your applications handle reconnection gracefully
+- Monitor the `PrefixAcquired` condition for alerting
 
 ## Roadmap
 
 - [x] Core operator framework (kubebuilder)
-- [x] DHCPv6-PD client integration
 - [x] Router Advertisement monitoring
+- [x] Address range mode (within /64)
 - [x] Cilium LB-IPAM integration
 - [x] Cilium CIDRGroup integration
+- [ ] DHCPv6-PD client (act as PD client)
+- [ ] BGP integration for subnet mode
 - [ ] Calico IPPool backend
 - [ ] MetalLB IPAddressPool backend
-- [ ] Multi-cluster support
-- [ ] Web UI for prefix visualization
 
 ## Contributing
 
@@ -305,8 +280,6 @@ Apache License 2.0. See [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
-- [insomniacslk/dhcp](https://github.com/insomniacslk/dhcp) — DHCPv6 library
 - [mdlayher/ndp](https://github.com/mdlayher/ndp) — NDP/RA library
 - [1Password Operator](https://github.com/1Password/onepassword-operator) — Inspiration for annotation-based binding
-- [k6u](https://github.com/0xC0ncord/k6u) — Inspiration for CiliumCIDRGroup updates
 - [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime) — Kubernetes controller framework
