@@ -27,11 +27,13 @@ make test-e2e         # Run e2e tests with Kind cluster
 
 1. **Prefix Receiver Interface** (`internal/prefix/types.go`): Abstraction for prefix acquisition with channel-based events for prefix changes. Implementations handle DHCPv6-PD and Router Advertisements.
 
-2. **DynamicPrefix CRD** (`api/v1alpha1/dynamicprefix_types.go`): Custom resource defining prefix acquisition settings, subnet definitions, and transition configuration. Status tracks current prefix, calculated subnets, and conditions (PrefixAcquired, PoolsSynced, Degraded).
+2. **DynamicPrefix CRD** (`api/v1alpha1/dynamicprefix_types.go`): Custom resource defining prefix acquisition settings, address range or subnet definitions, and transition configuration. Status tracks current prefix, calculated ranges/subnets, and conditions (PrefixAcquired, PoolsSynced, Degraded).
 
 3. **DynamicPrefixReconciler** (`internal/controller/dynamicprefix_controller.go`): Main reconciliation loop that manages prefix receivers, updates status, and handles graceful transitions with finalizer-based cleanup.
 
-4. **Subnet Calculation** (`internal/prefix/subnet.go`): Carves subnets from received prefix using offset/prefixLength configuration.
+4. **Address Range Calculation** (`internal/prefix/addressrange.go`): Combines prefix with start/end suffixes for Mode 1 (recommended).
+
+5. **Subnet Calculation** (`internal/prefix/subnet.go`): Carves subnets from received prefix using offset/prefixLength for Mode 2 (advanced, requires BGP).
 
 ### Data Flow
 
@@ -45,9 +47,10 @@ ISP/Router → DHCPv6-PD/RA Receiver → DynamicPrefix CR (status.currentPrefix)
 
 Uses annotation-based binding (inspired by 1Password Operator):
 - `dynamic-prefix.io/name`: References the DynamicPrefix CR
-- `dynamic-prefix.io/subnet`: Specifies which subnet to use
+- `dynamic-prefix.io/address-range`: Specifies which address range to use (Mode 1, recommended)
+- `dynamic-prefix.io/subnet`: Specifies which subnet to use (Mode 2, advanced)
 
-The operator watches annotated Cilium resources and auto-updates their `spec.blocks` or `spec.externalCIDRs`.
+The operator watches annotated Cilium resources and auto-updates their `spec.blocks` (with start/stop addresses) or `spec.externalCIDRs`.
 
 ## Testing
 
