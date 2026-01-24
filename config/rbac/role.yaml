@@ -17,6 +17,18 @@ rules:
 - apiGroups:
   - cilium.io
   resources:
+  - ciliumbgpadvertisements
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cilium.io
+  resources:
   - ciliumcidrgroups
   - ciliumloadbalancerippools
   verbs:
