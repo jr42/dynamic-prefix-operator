@@ -64,6 +64,18 @@ rules:
       - update
       - watch
 
+  # Service permissions (for HA mode)
+  - apiGroups:
+      - ""
+    resources:
+      - services
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+
   # Leader election permissions
   {{- if .Values.config.leaderElection.enabled }}
   - apiGroups:
