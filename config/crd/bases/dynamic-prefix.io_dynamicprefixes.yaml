@@ -163,17 +163,11 @@ spec:
                 description: Transition defines graceful transition settings when
                   prefix changes
                 properties:
-                  drainPeriodMinutes:
-                    default: 60
-                    description: DrainPeriodMinutes is how long to keep the old prefix
-                      active during transitions
-                    maximum: 1440
-                    minimum: 0
-                    type: integer
                   maxPrefixHistory:
                     default: 2
-                    description: MaxPrefixHistory is the maximum number of previous
-                      prefixes to retain
+                    description: |-
+                      MaxPrefixHistory is the maximum number of previous prefixes to retain in pool blocks.
+                      When a new prefix is received, historical prefixes beyond this limit are dropped.
                     maximum: 10
                     minimum: 1
                     type: integer

@@ -173,42 +173,60 @@ func (r *PoolSyncReconciler) buildPoolConfigurations(
 	hasSubnet bool,
 	subnetName string,
 ) ([]poolConfiguration, error) {
-	log := logf.FromContext(ctx)
-	var configs []poolConfiguration
-
-	// Get max history count
-	maxHistory := 2 // Default
-	if dp.Spec.Transition != nil && dp.Spec.Transition.MaxPrefixHistory > 0 {
-		maxHistory = dp.Spec.Transition.MaxPrefixHistory
-	}
-
-	// Build configuration for current prefix
 	if dp.Status.CurrentPrefix == "" {
 		return nil, fmt.Errorf("DynamicPrefix has no current prefix")
 	}
 
-	if hasAddressRange && addressRangeName != "" {
-		// Mode 1: Address ranges
-		// Find the address range spec
-		var rangeSpec *dynamicprefixiov1alpha1.AddressRangeSpec
-		for i := range dp.Spec.AddressRanges {
-			if dp.Spec.AddressRanges[i].Name == addressRangeName {
-				rangeSpec = &dp.Spec.AddressRanges[i]
-				break
-			}
-		}
-		if rangeSpec == nil {
-			return nil, fmt.Errorf("address range spec %q not found", addressRangeName)
-		}
+	maxHistory := r.getMaxHistory(dp)
 
-		// Calculate for current prefix
-		currentConfig, err := r.calculateAddressRangeConfig(dp.Status.CurrentPrefix, rangeSpec)
+	if hasAddressRange && addressRangeName != "" {
+		return r.buildAddressRangeConfigs(ctx, dp, addressRangeName, maxHistory)
+	}
+
+	if hasSubnet && subnetName != "" {
+		return r.buildSubnetConfigs(ctx, dp, subnetName, maxHistory)
+	}
+
+	return r.buildRawPrefixConfigs(dp, maxHistory), nil
+}
+
+// getMaxHistory returns the maximum number of historical prefixes to retain.
+func (r *PoolSyncReconciler) getMaxHistory(dp *dynamicprefixiov1alpha1.DynamicPrefix) int {
+	if dp.Spec.Transition != nil && dp.Spec.Transition.MaxPrefixHistory > 0 {
+		return dp.Spec.Transition.MaxPrefixHistory
+	}
+	return 2 // Default
+}
+
+// buildAddressRangeConfigs builds configurations for address range mode.
+func (r *PoolSyncReconciler) buildAddressRangeConfigs(
+	ctx context.Context,
+	dp *dynamicprefixiov1alpha1.DynamicPrefix,
+	addressRangeName string,
+	maxHistory int,
+) ([]poolConfiguration, error) {
+	log := logf.FromContext(ctx)
+	var configs []poolConfiguration
+
+	// Find the address range spec
+	rangeSpec := r.findAddressRangeSpec(dp, addressRangeName)
+
+	// Get current config from status or calculate from spec
+	currentConfig := r.findAddressRangeInStatus(dp, addressRangeName)
+	if currentConfig == nil {
+		if rangeSpec == nil {
+			return nil, fmt.Errorf("address range %q not found in status or spec", addressRangeName)
+		}
+		calculated, err := r.calculateAddressRangeConfig(dp.Status.CurrentPrefix, rangeSpec)
 		if err != nil {
 			return nil, fmt.Errorf("failed to calculate address range for current prefix: %w", err)
 		}
-		configs = append(configs, currentConfig)
+		currentConfig = &calculated
+	}
+	configs = append(configs, *currentConfig)
 
-		// Calculate for historical prefixes
+	// Calculate for historical prefixes
+	if rangeSpec != nil {
 		for i, histEntry := range dp.Status.History {
 			if i >= maxHistory {
 				break
@@ -221,28 +239,40 @@ func (r *PoolSyncReconciler) buildPoolConfigurations(
 			}
 			configs = append(configs, histConfig)
 		}
-	} else if hasSubnet && subnetName != "" {
-		// Mode 2: Subnets
-		// Find the subnet spec
-		var subnetSpec *dynamicprefixiov1alpha1.SubnetSpec
-		for i := range dp.Spec.Subnets {
-			if dp.Spec.Subnets[i].Name == subnetName {
-				subnetSpec = &dp.Spec.Subnets[i]
-				break
-			}
-		}
-		if subnetSpec == nil {
-			return nil, fmt.Errorf("subnet spec %q not found", subnetName)
-		}
+	}
 
-		// Calculate for current prefix
-		currentConfig, err := r.calculateSubnetConfig(dp.Status.CurrentPrefix, subnetSpec)
+	return configs, nil
+}
+
+// buildSubnetConfigs builds configurations for subnet mode.
+func (r *PoolSyncReconciler) buildSubnetConfigs(
+	ctx context.Context,
+	dp *dynamicprefixiov1alpha1.DynamicPrefix,
+	subnetName string,
+	maxHistory int,
+) ([]poolConfiguration, error) {
+	log := logf.FromContext(ctx)
+	var configs []poolConfiguration
+
+	// Find the subnet spec
+	subnetSpec := r.findSubnetSpec(dp, subnetName)
+
+	// Get current config from status or calculate from spec
+	currentConfig := r.findSubnetInStatus(dp, subnetName)
+	if currentConfig == nil {
+		if subnetSpec == nil {
+			return nil, fmt.Errorf("subnet %q not found in status or spec", subnetName)
+		}
+		calculated, err := r.calculateSubnetConfig(dp.Status.CurrentPrefix, subnetSpec)
 		if err != nil {
 			return nil, fmt.Errorf("failed to calculate subnet for current prefix: %w", err)
 		}
-		configs = append(configs, currentConfig)
+		currentConfig = &calculated
+	}
+	configs = append(configs, *currentConfig)
 
-		// Calculate for historical prefixes
+	// Calculate for historical prefixes
+	if subnetSpec != nil {
 		for i, histEntry := range dp.Status.History {
 			if i >= maxHistory {
 				break
@@ -255,26 +285,92 @@ func (r *PoolSyncReconciler) buildPoolConfigurations(
 			}
 			configs = append(configs, histConfig)
 		}
-	} else {
-		// Use the main prefix directly
-		configs = append(configs, poolConfiguration{
-			useAddressRange: false,
-			cidr:            dp.Status.CurrentPrefix,
-		})
-
-		// Add historical prefixes
-		for i, histEntry := range dp.Status.History {
-			if i >= maxHistory {
-				break
-			}
-			configs = append(configs, poolConfiguration{
-				useAddressRange: false,
-				cidr:            histEntry.Prefix,
-			})
-		}
 	}
 
 	return configs, nil
+}
+
+// buildRawPrefixConfigs builds configurations using raw prefixes (no address range or subnet).
+func (r *PoolSyncReconciler) buildRawPrefixConfigs(
+	dp *dynamicprefixiov1alpha1.DynamicPrefix,
+	maxHistory int,
+) []poolConfiguration {
+	configs := []poolConfiguration{{
+		useAddressRange: false,
+		cidr:            dp.Status.CurrentPrefix,
+	}}
+
+	for i, histEntry := range dp.Status.History {
+		if i >= maxHistory {
+			break
+		}
+		configs = append(configs, poolConfiguration{
+			useAddressRange: false,
+			cidr:            histEntry.Prefix,
+		})
+	}
+
+	return configs
+}
+
+// findAddressRangeSpec finds an address range spec by name.
+func (r *PoolSyncReconciler) findAddressRangeSpec(
+	dp *dynamicprefixiov1alpha1.DynamicPrefix,
+	name string,
+) *dynamicprefixiov1alpha1.AddressRangeSpec {
+	for i := range dp.Spec.AddressRanges {
+		if dp.Spec.AddressRanges[i].Name == name {
+			return &dp.Spec.AddressRanges[i]
+		}
+	}
+	return nil
+}
+
+// findAddressRangeInStatus finds an address range in status by name.
+func (r *PoolSyncReconciler) findAddressRangeInStatus(
+	dp *dynamicprefixiov1alpha1.DynamicPrefix,
+	name string,
+) *poolConfiguration {
+	for _, ar := range dp.Status.AddressRanges {
+		if ar.Name == name {
+			return &poolConfiguration{
+				useAddressRange: true,
+				start:           ar.Start,
+				end:             ar.End,
+				cidr:            ar.CIDR,
+			}
+		}
+	}
+	return nil
+}
+
+// findSubnetSpec finds a subnet spec by name.
+func (r *PoolSyncReconciler) findSubnetSpec(
+	dp *dynamicprefixiov1alpha1.DynamicPrefix,
+	name string,
+) *dynamicprefixiov1alpha1.SubnetSpec {
+	for i := range dp.Spec.Subnets {
+		if dp.Spec.Subnets[i].Name == name {
+			return &dp.Spec.Subnets[i]
+		}
+	}
+	return nil
+}
+
+// findSubnetInStatus finds a subnet in status by name.
+func (r *PoolSyncReconciler) findSubnetInStatus(
+	dp *dynamicprefixiov1alpha1.DynamicPrefix,
+	name string,
+) *poolConfiguration {
+	for _, s := range dp.Status.Subnets {
+		if s.Name == name {
+			return &poolConfiguration{
+				useAddressRange: false,
+				cidr:            s.CIDR,
+			}
+		}
+	}
+	return nil
 }
 
 // calculateAddressRangeConfig calculates a pool configuration from a prefix and address range spec.

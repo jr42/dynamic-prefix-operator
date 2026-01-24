@@ -146,14 +146,8 @@ type TransitionSpec struct {
 	// +kubebuilder:default=simple
 	Mode TransitionMode `json:"mode,omitempty"`
 
-	// DrainPeriodMinutes is how long to keep the old prefix active during transitions
-	// +optional
-	// +kubebuilder:default=60
-	// +kubebuilder:validation:Minimum=0
-	// +kubebuilder:validation:Maximum=1440
-	DrainPeriodMinutes int `json:"drainPeriodMinutes,omitempty"`
-
-	// MaxPrefixHistory is the maximum number of previous prefixes to retain
+	// MaxPrefixHistory is the maximum number of previous prefixes to retain in pool blocks.
+	// When a new prefix is received, historical prefixes beyond this limit are dropped.
 	// +optional
 	// +kubebuilder:default=2
 	// +kubebuilder:validation:Minimum=1

@@ -265,8 +265,7 @@ metadata:
 - `subnets`: How to subdivide the prefix (Mode 2)
 - `transition`: Graceful transition settings
   - `mode`: `simple` (default) or `ha` (high availability with multi-IP Services)
-  - `maxPrefixHistory`: Number of historical prefixes to retain (default: 2)
-  - `drainPeriodMinutes`: How long to keep old prefix active
+  - `maxPrefixHistory`: Number of historical prefixes to retain in pool blocks (default: 2)
 
 **Status:**
 - `currentPrefix`: Currently active prefix

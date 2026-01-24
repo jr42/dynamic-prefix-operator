@@ -33,7 +33,7 @@ spec:
       end: "::ffff:ffff:ffff:ffff"
 
   transition:
-    drainPeriodMinutes: 60
+    mode: simple  # or "ha" for high availability
     maxPrefixHistory: 2
 
 ---
@@ -65,7 +65,7 @@ spec:
       end: "::ff0f:0:0:0"
 
   transition:
-    drainPeriodMinutes: 30
+    mode: simple
     maxPrefixHistory: 2
 
 ---
@@ -112,7 +112,7 @@ spec:
       prefixLength: 120
 
   transition:
-    drainPeriodMinutes: 60
+    mode: simple  # or "ha" for high availability
     maxPrefixHistory: 2
 
 ---
@@ -133,5 +133,5 @@ spec:
       end: "::f0ff:ffff:ffff:ffff"
 
   transition:
-    drainPeriodMinutes: 5
+    mode: simple
     maxPrefixHistory: 1

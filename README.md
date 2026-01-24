@@ -265,7 +265,6 @@ spec:
   # Transition settings
   transition:
     mode: simple            # "simple" (default) or "ha" for high availability
-    drainPeriodMinutes: 60  # Keep old prefix info during transitions
     maxPrefixHistory: 2     # Number of historical prefixes to retain in pool blocks
 ```
 
