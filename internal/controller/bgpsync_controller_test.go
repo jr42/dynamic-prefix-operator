@@ -20,6 +20,8 @@ import (
 	"context"
 	"testing"
 
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -31,6 +33,337 @@ import (
 
 	dynamicprefixiov1alpha1 "github.com/jr42/dynamic-prefix-operator/api/v1alpha1"
 )
+
+// ============================================================================
+// Ginkgo Integration Tests (run with envtest in CI)
+// ============================================================================
+
+var _ = Describe("BGPSync Controller", func() {
+	Context("When reconciling a DynamicPrefix with BGP-enabled subnet", func() {
+		const (
+			dpName     = "test-bgp-dp"
+			subnetName = "loadbalancers"
+			community  = "65001:42"
+		)
+
+		ctx := context.Background()
+
+		BeforeEach(func() {
+			// Create DynamicPrefix with BGP-enabled subnet
+			dp := &dynamicprefixiov1alpha1.DynamicPrefix{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: dpName,
+				},
+				Spec: dynamicprefixiov1alpha1.DynamicPrefixSpec{
+					Acquisition: dynamicprefixiov1alpha1.AcquisitionSpec{
+						RouterAdvertisement: &dynamicprefixiov1alpha1.RouterAdvertisementSpec{
+							Interface: "eth0",
+							Enabled:   true,
+						},
+					},
+					Subnets: []dynamicprefixiov1alpha1.SubnetSpec{
+						{
+							Name:         subnetName,
+							Offset:       0,
+							PrefixLength: 64,
+							BGP: &dynamicprefixiov1alpha1.SubnetBGPSpec{
+								Advertise: true,
+								Community: community,
+							},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, dp)).To(Succeed())
+
+			// Update DynamicPrefix status
+			dp.Status = dynamicprefixiov1alpha1.DynamicPrefixStatus{
+				CurrentPrefix: "2001:db8::/48",
+				Subnets: []dynamicprefixiov1alpha1.SubnetStatus{
+					{
+						Name: subnetName,
+						CIDR: "2001:db8::/64",
+					},
+				},
+			}
+			Expect(k8sClient.Status().Update(ctx, dp)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			// Cleanup DynamicPrefix
+			dp := &dynamicprefixiov1alpha1.DynamicPrefix{}
+			dp.Name = dpName
+			_ = k8sClient.Delete(ctx, dp)
+
+			// Cleanup CiliumBGPAdvertisement
+			adv := &unstructured.Unstructured{}
+			adv.SetGroupVersionKind(CiliumBGPAdvertisementGVK)
+			adv.SetName("dp-" + dpName + "-" + subnetName)
+			_ = k8sClient.Delete(ctx, adv)
+		})
+
+		It("should create a CiliumBGPAdvertisement with correct spec", func() {
+			reconciler := &BGPSyncReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: dpName},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify CiliumBGPAdvertisement was created
+			adv := &unstructured.Unstructured{}
+			adv.SetGroupVersionKind(CiliumBGPAdvertisementGVK)
+			advName := "dp-" + dpName + "-" + subnetName
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: advName}, adv)).To(Succeed())
+
+			// Check labels
+			labels := adv.GetLabels()
+			Expect(labels).To(HaveKeyWithValue(LabelManagedBy, LabelManagedByValue))
+			Expect(labels).To(HaveKeyWithValue(LabelDynamicPrefixName, dpName))
+			Expect(labels).To(HaveKeyWithValue(LabelSubnetName, subnetName))
+
+			// Check spec
+			advertisements, found, err := unstructured.NestedSlice(adv.Object, "spec", "advertisements")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(advertisements).To(HaveLen(1))
+
+			advSpec := advertisements[0].(map[string]interface{})
+			Expect(advSpec["advertisementType"]).To(Equal("Service"))
+
+			// Check service addresses
+			service, found, err := unstructured.NestedMap(advSpec, "service")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(service["addresses"]).To(ContainElement("LoadBalancerIP"))
+
+			// Check community
+			communities, found, err := unstructured.NestedStringSlice(advSpec, "attributes", "communities", "standard")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(communities).To(ContainElement(community))
+		})
+
+		It("should update DynamicPrefix status with advertisement name and condition", func() {
+			reconciler := &BGPSyncReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: dpName},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Fetch updated DynamicPrefix
+			var dp dynamicprefixiov1alpha1.DynamicPrefix
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: dpName}, &dp)).To(Succeed())
+
+			// Check status has advertisement name
+			Expect(dp.Status.Subnets).To(HaveLen(1))
+			Expect(dp.Status.Subnets[0].BGPAdvertisement).To(Equal("dp-" + dpName + "-" + subnetName))
+
+			// Check BGPAdvertisementReady condition
+			var bgpCondition *metav1.Condition
+			for i := range dp.Status.Conditions {
+				if dp.Status.Conditions[i].Type == dynamicprefixiov1alpha1.ConditionTypeBGPAdvertisementReady {
+					bgpCondition = &dp.Status.Conditions[i]
+					break
+				}
+			}
+			Expect(bgpCondition).NotTo(BeNil())
+			Expect(bgpCondition.Status).To(Equal(metav1.ConditionTrue))
+			Expect(bgpCondition.Reason).To(Equal("AdvertisementsReady"))
+		})
+	})
+
+	Context("When reconciling a DynamicPrefix without BGP-enabled subnets", func() {
+		const (
+			dpName     = "test-no-bgp-dp"
+			subnetName = "no-bgp-subnet"
+		)
+
+		ctx := context.Background()
+
+		BeforeEach(func() {
+			// Create DynamicPrefix without BGP
+			dp := &dynamicprefixiov1alpha1.DynamicPrefix{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: dpName,
+				},
+				Spec: dynamicprefixiov1alpha1.DynamicPrefixSpec{
+					Acquisition: dynamicprefixiov1alpha1.AcquisitionSpec{
+						RouterAdvertisement: &dynamicprefixiov1alpha1.RouterAdvertisementSpec{
+							Interface: "eth0",
+							Enabled:   true,
+						},
+					},
+					Subnets: []dynamicprefixiov1alpha1.SubnetSpec{
+						{
+							Name:         subnetName,
+							Offset:       0,
+							PrefixLength: 64,
+							// No BGP spec
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, dp)).To(Succeed())
+
+			// Update DynamicPrefix status
+			dp.Status = dynamicprefixiov1alpha1.DynamicPrefixStatus{
+				CurrentPrefix: "2001:db8::/48",
+				Subnets: []dynamicprefixiov1alpha1.SubnetStatus{
+					{
+						Name: subnetName,
+						CIDR: "2001:db8::/64",
+					},
+				},
+			}
+			Expect(k8sClient.Status().Update(ctx, dp)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			dp := &dynamicprefixiov1alpha1.DynamicPrefix{}
+			dp.Name = dpName
+			_ = k8sClient.Delete(ctx, dp)
+		})
+
+		It("should set BGPAdvertisementReady condition to False with NoBGPSubnets reason", func() {
+			reconciler := &BGPSyncReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: dpName},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Fetch updated DynamicPrefix
+			var dp dynamicprefixiov1alpha1.DynamicPrefix
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: dpName}, &dp)).To(Succeed())
+
+			// Check condition
+			var bgpCondition *metav1.Condition
+			for i := range dp.Status.Conditions {
+				if dp.Status.Conditions[i].Type == dynamicprefixiov1alpha1.ConditionTypeBGPAdvertisementReady {
+					bgpCondition = &dp.Status.Conditions[i]
+					break
+				}
+			}
+			Expect(bgpCondition).NotTo(BeNil())
+			Expect(bgpCondition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(bgpCondition.Reason).To(Equal("NoBGPSubnets"))
+		})
+	})
+
+	Context("When BGP is disabled on a previously enabled subnet", func() {
+		const (
+			dpName     = "test-bgp-disable-dp"
+			subnetName = "was-bgp-enabled"
+		)
+
+		ctx := context.Background()
+
+		BeforeEach(func() {
+			// Create DynamicPrefix with BGP enabled
+			dp := &dynamicprefixiov1alpha1.DynamicPrefix{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: dpName,
+				},
+				Spec: dynamicprefixiov1alpha1.DynamicPrefixSpec{
+					Acquisition: dynamicprefixiov1alpha1.AcquisitionSpec{
+						RouterAdvertisement: &dynamicprefixiov1alpha1.RouterAdvertisementSpec{
+							Interface: "eth0",
+							Enabled:   true,
+						},
+					},
+					Subnets: []dynamicprefixiov1alpha1.SubnetSpec{
+						{
+							Name:         subnetName,
+							Offset:       0,
+							PrefixLength: 64,
+							BGP: &dynamicprefixiov1alpha1.SubnetBGPSpec{
+								Advertise: true,
+							},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, dp)).To(Succeed())
+
+			dp.Status = dynamicprefixiov1alpha1.DynamicPrefixStatus{
+				CurrentPrefix: "2001:db8::/48",
+				Subnets: []dynamicprefixiov1alpha1.SubnetStatus{
+					{
+						Name: subnetName,
+						CIDR: "2001:db8::/64",
+					},
+				},
+			}
+			Expect(k8sClient.Status().Update(ctx, dp)).To(Succeed())
+
+			// Reconcile to create the advertisement
+			reconciler := &BGPSyncReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: dpName},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify advertisement exists
+			adv := &unstructured.Unstructured{}
+			adv.SetGroupVersionKind(CiliumBGPAdvertisementGVK)
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "dp-" + dpName + "-" + subnetName}, adv)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			dp := &dynamicprefixiov1alpha1.DynamicPrefix{}
+			dp.Name = dpName
+			_ = k8sClient.Delete(ctx, dp)
+
+			adv := &unstructured.Unstructured{}
+			adv.SetGroupVersionKind(CiliumBGPAdvertisementGVK)
+			adv.SetName("dp-" + dpName + "-" + subnetName)
+			_ = k8sClient.Delete(ctx, adv)
+		})
+
+		It("should delete the orphaned CiliumBGPAdvertisement when BGP is disabled", func() {
+			// Update DynamicPrefix to disable BGP
+			var dp dynamicprefixiov1alpha1.DynamicPrefix
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: dpName}, &dp)).To(Succeed())
+
+			dp.Spec.Subnets[0].BGP.Advertise = false
+			Expect(k8sClient.Update(ctx, &dp)).To(Succeed())
+
+			// Reconcile
+			reconciler := &BGPSyncReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: dpName},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify advertisement was deleted
+			adv := &unstructured.Unstructured{}
+			adv.SetGroupVersionKind(CiliumBGPAdvertisementGVK)
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: "dp-" + dpName + "-" + subnetName}, adv)
+			Expect(err).To(HaveOccurred())
+		})
+	})
+})
+
+// ============================================================================
+// Standard Go Unit Tests (run without envtest, use fake client)
+// ============================================================================
 
 func newTestScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
@@ -749,14 +1082,21 @@ func TestBuildAdvertisementSpec(t *testing.T) {
 }
 
 func TestCiliumBGPAdvertisementGVK(t *testing.T) {
-	if CiliumBGPAdvertisementGVK.Group != "cilium.io" {
-		t.Errorf("CiliumBGPAdvertisementGVK.Group = %q, want %q", CiliumBGPAdvertisementGVK.Group, "cilium.io")
+	// Expected values for GVK verification
+	const (
+		expectedGroup   = "cilium.io"
+		expectedVersion = "v2alpha1"
+		expectedKind    = "CiliumBGPAdvertisement"
+	)
+
+	if CiliumBGPAdvertisementGVK.Group != expectedGroup {
+		t.Errorf("CiliumBGPAdvertisementGVK.Group = %q, want %q", CiliumBGPAdvertisementGVK.Group, expectedGroup)
 	}
-	if CiliumBGPAdvertisementGVK.Version != "v2alpha1" {
-		t.Errorf("CiliumBGPAdvertisementGVK.Version = %q, want %q", CiliumBGPAdvertisementGVK.Version, "v2alpha1")
+	if CiliumBGPAdvertisementGVK.Version != expectedVersion {
+		t.Errorf("CiliumBGPAdvertisementGVK.Version = %q, want %q", CiliumBGPAdvertisementGVK.Version, expectedVersion)
 	}
-	if CiliumBGPAdvertisementGVK.Kind != "CiliumBGPAdvertisement" {
-		t.Errorf("CiliumBGPAdvertisementGVK.Kind = %q, want %q", CiliumBGPAdvertisementGVK.Kind, "CiliumBGPAdvertisement")
+	if CiliumBGPAdvertisementGVK.Kind != expectedKind {
+		t.Errorf("CiliumBGPAdvertisementGVK.Kind = %q, want %q", CiliumBGPAdvertisementGVK.Kind, expectedKind)
 	}
 }
 

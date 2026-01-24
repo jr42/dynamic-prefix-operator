@@ -258,7 +258,7 @@ func (r *BGPSyncReconciler) buildAdvertisementSpec(
 	}
 
 	// Add service selector if available from the pool
-	if poolServiceSelector != nil && len(poolServiceSelector) > 0 {
+	if len(poolServiceSelector) > 0 {
 		advertisement["selector"] = poolServiceSelector
 	}
 
