@@ -6,8 +6,8 @@ description: |
   resources when your ISP-delegated IPv6 prefix changes.
 
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.0.1
+appVersion: "0.0.1"
 
 keywords:
   - kubernetes
