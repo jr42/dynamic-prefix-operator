@@ -123,6 +123,28 @@ type SubnetSpec struct {
 	// +kubebuilder:validation:Minimum=48
 	// +kubebuilder:validation:Maximum=128
 	PrefixLength int `json:"prefixLength"`
+
+	// BGP configures BGP advertisement for LoadBalancer IPs from this subnet.
+	// Requires Cilium BGP Control Plane to be enabled and peering configured separately.
+	// +optional
+	BGP *SubnetBGPSpec `json:"bgp,omitempty"`
+}
+
+// SubnetBGPSpec configures BGP advertisement for a subnet.
+type SubnetBGPSpec struct {
+	// Advertise enables BGP advertisement of LoadBalancer IPs from this subnet.
+	// When true, the operator creates a CiliumBGPAdvertisement resource that
+	// causes Cilium to announce individual Service IPs (/128) to BGP peers.
+	// +optional
+	Advertise bool `json:"advertise,omitempty"`
+
+	// Community is the BGP community to attach to advertisements.
+	// Format: "ASN:VALUE" (e.g., "65001:100").
+	// The router should be configured to filter and only accept routes with this community.
+	// This provides an additional layer of security beyond prefix-length filtering.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^\d+:\d+$`
+	Community string `json:"community,omitempty"`
 }
 
 // TransitionMode defines the transition behavior mode
@@ -223,6 +245,11 @@ type SubnetStatus struct {
 
 	// CIDR is the calculated subnet in CIDR notation
 	CIDR string `json:"cidr"`
+
+	// BGPAdvertisement is the name of the managed CiliumBGPAdvertisement resource.
+	// Only set when bgp.advertise is true for this subnet.
+	// +optional
+	BGPAdvertisement string `json:"bgpAdvertisement,omitempty"`
 }
 
 // PrefixHistoryEntry represents a historical prefix
@@ -262,6 +289,9 @@ const (
 
 	// ConditionTypeDegraded indicates the resource is in a degraded state
 	ConditionTypeDegraded = "Degraded"
+
+	// ConditionTypeBGPAdvertisementReady indicates whether BGP advertisements are configured
+	ConditionTypeBGPAdvertisementReady = "BGPAdvertisementReady"
 )
 
 // +kubebuilder:object:root=true

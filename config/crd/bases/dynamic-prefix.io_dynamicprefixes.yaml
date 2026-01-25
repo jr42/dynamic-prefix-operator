@@ -135,6 +135,26 @@ spec:
                     This is used for Mode 2 (advanced) where you claim a dedicated /64 from
                     a larger prefix and announce it via BGP.
                   properties:
+                    bgp:
+                      description: |-
+                        BGP configures BGP advertisement for LoadBalancer IPs from this subnet.
+                        Requires Cilium BGP Control Plane to be enabled and peering configured separately.
+                      properties:
+                        advertise:
+                          description: |-
+                            Advertise enables BGP advertisement of LoadBalancer IPs from this subnet.
+                            When true, the operator creates a CiliumBGPAdvertisement resource that
+                            causes Cilium to announce individual Service IPs (/128) to BGP peers.
+                          type: boolean
+                        community:
+                          description: |-
+                            Community is the BGP community to attach to advertisements.
+                            Format: "ASN:VALUE" (e.g., "65001:100").
+                            The router should be configured to filter and only accept routes with this community.
+                            This provides an additional layer of security beyond prefix-length filtering.
+                          pattern: ^\d+:\d+$
+                          type: string
+                      type: object
                     name:
                       description: Name identifies this subnet (used in annotations
                         to reference it)
@@ -326,6 +346,11 @@ spec:
                 items:
                   description: SubnetStatus represents the current state of a subnet
                   properties:
+                    bgpAdvertisement:
+                      description: |-
+                        BGPAdvertisement is the name of the managed CiliumBGPAdvertisement resource.
+                        Only set when bgp.advertise is true for this subnet.
+                      type: string
                     cidr:
                       description: CIDR is the calculated subnet in CIDR notation
                       type: string

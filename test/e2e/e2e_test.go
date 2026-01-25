@@ -57,11 +57,14 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
 
-		By("labeling the namespace to enforce the restricted security policy")
+		// NOTE: This operator requires NET_RAW capability and root access for
+		// raw socket operations (RA monitoring, DHCPv6-PD). The "privileged"
+		// policy is required; "restricted" does not allow these capabilities.
+		By("labeling the namespace to enforce the privileged security policy")
 		cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
-			"pod-security.kubernetes.io/enforce=restricted")
+			"pod-security.kubernetes.io/enforce=privileged")
 		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
+		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with privileged policy")
 
 		By("installing CRDs")
 		cmd = exec.Command("make", "install")

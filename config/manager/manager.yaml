@@ -51,10 +51,10 @@ spec:
       #             values:
       #               - linux
       securityContext:
-        # Projects are configured by default to adhere to the "restricted" Pod Security Standards.
-        # This ensures that deployments meet the highest security requirements for Kubernetes.
-        # For more details, see: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
-        runAsNonRoot: true
+        # NOTE: This operator requires root and NET_RAW capability for raw socket access
+        # needed by RA monitoring (ICMPv6) and DHCPv6-PD client functionality.
+        runAsNonRoot: false
+        runAsUser: 0
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -72,6 +72,8 @@ spec:
           capabilities:
             drop:
             - "ALL"
+            add:
+            - "NET_RAW"
         livenessProbe:
           httpGet:
             path: /healthz

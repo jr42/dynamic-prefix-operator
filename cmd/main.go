@@ -210,6 +210,15 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ServiceSync")
 		os.Exit(1)
 	}
+
+	// Set up BGPSync controller for BGP advertisement management
+	if err := (&controller.BGPSyncReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "BGPSync")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
