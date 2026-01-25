@@ -64,6 +64,20 @@ rules:
       - update
       - watch
 
+  # CiliumBGPAdvertisement permissions (for BGP subnet mode)
+  - apiGroups:
+      - cilium.io
+    resources:
+      - ciliumbgpadvertisements
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+
   # Service permissions (for HA mode)
   - apiGroups:
       - ""
