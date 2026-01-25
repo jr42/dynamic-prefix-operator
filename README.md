@@ -156,20 +156,6 @@ spec:
       end: "::ffff:ffff:ffff:ffff"  # Upper bound suffix
 ```
 
-## Subnet Mode (Advanced)
-
-If you receive a larger prefix (e.g., /56 or /48), you can carve out dedicated /64 subnets. This mode requires BGP to announce the subnets to your router.
-
-> **Note:** BGP integration is planned but not yet implemented. Use Address Range mode for now.
-
-```yaml
-spec:
-  subnets:
-    - name: loadbalancers
-      offset: 0
-      prefixLength: 64
-```
-
 ## Graceful Prefix Transitions
 
 When your ISP changes your prefix, the operator supports two transition modes to minimize service disruption:
@@ -223,7 +209,6 @@ annotations:
 |------------|-------------|
 | `dynamic-prefix.io/name` | Name of the DynamicPrefix CR (required) |
 | `dynamic-prefix.io/service-address-range` | Which address range for IP calculation |
-| `dynamic-prefix.io/service-subnet` | Which subnet for IP calculation |
 
 ## Supported Annotations
 
@@ -232,8 +217,7 @@ Add these annotations to Cilium resources to have them managed by the operator:
 | Annotation | Description |
 |------------|-------------|
 | `dynamic-prefix.io/name` | Name of the DynamicPrefix CR to reference |
-| `dynamic-prefix.io/address-range` | Name of the address range to use (Mode 1) |
-| `dynamic-prefix.io/subnet` | Name of the subnet to use (Mode 2) |
+| `dynamic-prefix.io/address-range` | Name of the address range to use |
 
 ## Supported Resources
 
@@ -330,8 +314,8 @@ When your ISP changes your prefix:
 - [x] Cilium CIDRGroup integration
 - [x] Graceful prefix transitions (simple mode)
 - [x] HA mode with multi-IP Services and DNS targeting
+- [ ] Subnet mode with BGP (carve /64s from larger prefix)
 - [ ] DHCPv6-PD client (act as PD client)
-- [ ] BGP integration for subnet mode
 - [ ] Calico IPPool backend
 - [ ] MetalLB IPAddressPool backend
 

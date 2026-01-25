@@ -1,6 +1,6 @@
 # Prefix Acquisition Modes
 
-This guide explains how the Dynamic Prefix Operator works with your network setup and helps you choose the right configuration for your environment.
+This guide explains how the Dynamic Prefix Operator works with your network setup.
 
 ## The Problem: Dynamic IPv6 Prefixes
 
@@ -12,7 +12,7 @@ Most home and small office internet connections receive a dynamic IPv6 prefix fr
 
 ## How IPv6 Prefix Delegation Works
 
-Understanding the typical home/SOHO network helps clarify the options:
+Understanding the typical home/SOHO network helps clarify the setup:
 
 ```
 ISP
@@ -35,7 +35,7 @@ Your Network/VLAN
 
 ---
 
-## Mode 1: Address Range (Recommended)
+## Address Range Mode (Recommended)
 
 **Use a reserved range within your existing /64**
 
@@ -80,18 +80,17 @@ spec:
       end: "::ffff:ffff:ffff:ffff"
 ```
 
-### Pros
+### Advantages
 
 - **Simple setup** - no BGP or advanced routing required
 - **Works immediately** - the /64 is already routed to your VLAN
 - **Automatic updates** - when ISP prefix changes, operator detects new /64 and updates pools
 - **Compatible with any router** - just needs DHCPv6 range configuration
 
-### Cons
+### Considerations
 
 - **Requires router coordination** - must configure router to not hand out addresses in your range
 - **Shared address space** - your K8s services share the /64 with other devices (though in separate ranges)
-- **Theoretical SLAAC collision** - privacy addresses are random, but collision is extremely unlikely with proper range separation
 
 ### Who should use this
 
@@ -101,116 +100,9 @@ spec:
 
 ---
 
-## Mode 2: Dedicated Subnet (Advanced)
-
-**Claim an unused /64 from your ISP-delegated prefix**
-
-This approach gives you a completely separate /64 for Kubernetes, but requires BGP routing.
-
-### How it works
-
-```
-ISP delegates to router:   2001:db8:abcd::/56
-Router uses for VLANs:     2001:db8:abcd:00::/64 (VLAN 1)
-                           2001:db8:abcd:01::/64 (VLAN 2)
-                           ...
-Operator claims:           2001:db8:abcd:ff::/64 (unused, high range)
-                           └── Entire /64 for K8s (18 quintillion addresses)
-```
-
-Since routers typically assign /64s sequentially to VLANs, picking a high subnet index (like 255) avoids collision unless you have 250+ VLANs.
-
-### Requirements
-
-1. **BGP peering** between Cilium and your router
-2. **Router configuration** to accept routes from your K8s nodes
-3. **Operator manages Cilium BGP** - updates route announcements when prefix changes
-
-### The Dynamic Prefix Challenge
-
-When your ISP prefix changes, the announced route must also change:
-
-```
-Day 1: Announce 2001:db8:abcd:ff::/64
-Day 2: ISP changes prefix
-       Announce 2001:db8:9999:ff::/64
-```
-
-The operator handles the Cilium side automatically, but your router must be configured to accept route updates. For home routers, this typically means:
-
-- Accept any IPv6 route from your K8s node IPs
-- Or accept any /64 within GUA range (2000::/3)
-
-### Example Configuration
-
-```yaml
-apiVersion: dynamic-prefix.io/v1alpha1
-kind: DynamicPrefix
-metadata:
-  name: home-prefix
-spec:
-  acquisition:
-    routerAdvertisement:
-      interface: eth0
-      enabled: true
-
-  subnets:
-    - name: k8s-services
-      # Pick the 256th /64 from the parent prefix
-      subnetIndex: 255
-      prefixLength: 64
-      advertiseBGP: true
-```
-
-### Pros
-
-- **Clean separation** - dedicated /64 for K8s, no sharing with other devices
-- **No SLAAC collision risk** - completely separate address space
-- **More addresses** - full /64 instead of a range
-
-### Cons
-
-- **Requires BGP** - more complex setup
-- **Router must accept dynamic routes** - security consideration
-- **Not all routers support BGP** - UniFi does, many consumer routers don't
-- **More things to break** - BGP peering, route filters, etc.
-
-### Who should use this
-
-- Advanced users comfortable with BGP
-- Environments requiring strict address separation
-- Larger deployments needing more addresses
-- Users with BGP-capable routers (UniFi, MikroTik, OpenWRT with BIRD)
-
----
-
-## Quick Decision Guide
-
-```
-Do you need IPv6 LoadBalancer IPs?
-│
-├─ Yes
-│   │
-│   └─ Are you comfortable with BGP?
-│       │
-│       ├─ No  → Use Mode 1 (Address Range)
-│       │        Just configure your router's DHCPv6 range
-│       │
-│       └─ Yes → Do you need strict address separation?
-│                │
-│                ├─ No  → Use Mode 1 (simpler)
-│                └─ Yes → Use Mode 2 (Dedicated Subnet)
-│
-└─ No → You might not need this operator
-```
-
-**When in doubt, start with Mode 1.** It's simpler, works with any router, and covers most home/SOHO use cases. You can always migrate to Mode 2 later if needed.
-
----
-
 ## Router Configuration Examples
 
-### UniFi (Mode 1)
+### UniFi
 
 1. Go to **Network** → **Settings** → **Internet**
 2. Under **IPv6**, find DHCPv6 settings
@@ -219,7 +111,7 @@ Do you need IPv6 LoadBalancer IPs?
    - End: `::efff:ffff:ffff:ffff`
    - This leaves `::f000:0:0:0` through `::ffff:ffff:ffff:ffff` for K8s
 
-### OpenWRT (Mode 1)
+### OpenWRT
 
 In `/etc/config/dhcp`:
 ```
@@ -246,18 +138,17 @@ config dhcp 'lan'
 
 - Verify your router's DHCPv6 range excludes your operator's range
 - Check that no static IPs are assigned in the reserved range
-- Ensure the startOffset/endOffset don't overlap with SLAAC range
+- Ensure the start/end don't overlap with SLAAC range
 
-### "BGP routes aren't working" (Mode 2)
+---
 
-- Verify Cilium BGP peering is established
-- Check router accepts routes from K8s node IPs
-- Confirm the announced prefix is correct after ISP prefix change
+## Future: Subnet Mode with BGP
+
+A future release will support carving dedicated /64 subnets from larger prefixes (e.g., /56 or /48) and announcing them via BGP. This requires Cilium BGP Control Plane and is currently in development.
 
 ---
 
 ## Further Reading
 
 - [IPv6 Prefix Delegation (RFC 8415)](https://datatracker.ietf.org/doc/html/rfc8415)
-- [Cilium BGP Documentation](https://docs.cilium.io/en/stable/network/bgp/)
 - [SLAAC (RFC 4862)](https://datatracker.ietf.org/doc/html/rfc4862)

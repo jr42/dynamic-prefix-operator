@@ -261,8 +261,8 @@ metadata:
 
 **Spec:**
 - `acquisition`: How to receive the prefix (RA monitoring, DHCPv6-PD)
-- `addressRanges`: Ranges within the /64 (Mode 1)
-- `subnets`: How to subdivide the prefix (Mode 2)
+- `addressRanges`: Ranges within the /64 (recommended)
+- `subnets`: Subdivide prefix into /64s (future - requires BGP)
 - `transition`: Graceful transition settings
   - `mode`: `simple` (default) or `ha` (high availability with multi-IP Services)
   - `maxPrefixHistory`: Number of historical prefixes to retain in pool blocks (default: 2)
@@ -271,7 +271,6 @@ metadata:
 - `currentPrefix`: Currently active prefix
 - `prefixSource`: How prefix was received
 - `addressRanges`: Calculated full addresses
-- `subnets`: Calculated subnet CIDRs
 - `conditions`: Standard Kubernetes conditions
 
 ## Failure Modes and Recovery
