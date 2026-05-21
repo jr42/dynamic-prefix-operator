@@ -39,14 +39,12 @@ import (
 	dynamicprefixiov1alpha1 "github.com/jr42/dynamic-prefix-operator/api/v1alpha1"
 )
 
-var (
-	// CiliumBGPAdvertisementGVK is the GroupVersionKind for CiliumBGPAdvertisement.
-	CiliumBGPAdvertisementGVK = schema.GroupVersionKind{
-		Group:   "cilium.io",
-		Version: "v2alpha1",
-		Kind:    "CiliumBGPAdvertisement",
-	}
-)
+// DefaultCiliumBGPAdvertisementGVK is the default GVK used when CiliumVersions is not injected.
+var DefaultCiliumBGPAdvertisementGVK = schema.GroupVersionKind{
+	Group:   "cilium.io",
+	Version: "v2",
+	Kind:    "CiliumBGPAdvertisement",
+}
 
 const (
 	// LabelManagedBy identifies resources managed by this operator.
@@ -63,7 +61,22 @@ const (
 // resources for subnets with BGP advertisement enabled.
 type BGPSyncReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme         *runtime.Scheme
+	CiliumVersions *CiliumVersions
+}
+
+func (r *BGPSyncReconciler) bgpAdvGVK() schema.GroupVersionKind {
+	if r.CiliumVersions != nil {
+		return r.CiliumVersions.BGPAdvertisement
+	}
+	return DefaultCiliumBGPAdvertisementGVK
+}
+
+func (r *BGPSyncReconciler) lbIPPoolGVK() schema.GroupVersionKind {
+	if r.CiliumVersions != nil {
+		return r.CiliumVersions.LoadBalancerIPPool
+	}
+	return DefaultCiliumLBIPPoolGVK
 }
 
 // +kubebuilder:rbac:groups=cilium.io,resources=ciliumbgpadvertisements,verbs=get;list;watch;create;update;patch;delete
@@ -149,7 +162,7 @@ func (r *BGPSyncReconciler) reconcileAdvertisement(
 
 	// Create or update the advertisement
 	adv := &unstructured.Unstructured{}
-	adv.SetGroupVersionKind(CiliumBGPAdvertisementGVK)
+	adv.SetGroupVersionKind(r.bgpAdvGVK())
 	adv.SetName(advName)
 
 	// Check if it exists
@@ -162,7 +175,7 @@ func (r *BGPSyncReconciler) reconcileAdvertisement(
 		// Create new advertisement
 		adv = &unstructured.Unstructured{
 			Object: map[string]interface{}{
-				"apiVersion": "cilium.io/v2alpha1",
+				"apiVersion": APIVersion(r.bgpAdvGVK()),
 				"kind":       "CiliumBGPAdvertisement",
 				"metadata": map[string]interface{}{
 					"name": advName,
@@ -224,11 +237,7 @@ func (r *BGPSyncReconciler) getPoolServiceSelector(
 ) (map[string]interface{}, error) {
 	// List all CiliumLoadBalancerIPPools with matching annotations
 	poolList := &unstructured.UnstructuredList{}
-	poolList.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "cilium.io",
-		Version: "v2alpha1",
-		Kind:    "CiliumLoadBalancerIPPoolList",
-	})
+	poolList.SetGroupVersionKind(ListGVK(r.lbIPPoolGVK()))
 
 	if err := r.List(ctx, poolList); err != nil {
 		return nil, fmt.Errorf("failed to list CiliumLoadBalancerIPPools: %w", err)
@@ -299,11 +308,7 @@ func (r *BGPSyncReconciler) deleteOrphanedAdvertisements(
 
 	// List all advertisements managed by this operator for this DynamicPrefix
 	advList := &unstructured.UnstructuredList{}
-	advList.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "cilium.io",
-		Version: "v2alpha1",
-		Kind:    "CiliumBGPAdvertisementList",
-	})
+	advList.SetGroupVersionKind(ListGVK(r.bgpAdvGVK()))
 
 	if err := r.List(ctx, advList, client.MatchingLabels{
 		LabelManagedBy:         LabelManagedByValue,
@@ -379,10 +384,11 @@ func (r *BGPSyncReconciler) buildBGPCondition(
 ) metav1.Condition {
 	if len(subnetsWithBGP) == 0 {
 		return metav1.Condition{
-			Type:    dynamicprefixiov1alpha1.ConditionTypeBGPAdvertisementReady,
-			Status:  metav1.ConditionFalse,
-			Reason:  "NoBGPSubnets",
-			Message: "No subnets have BGP advertisement enabled",
+			Type:               dynamicprefixiov1alpha1.ConditionTypeBGPAdvertisementReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "NoBGPSubnets",
+			Message:            "No subnets have BGP advertisement enabled",
+			LastTransitionTime: metav1.Now(),
 		}
 	}
 
@@ -391,7 +397,7 @@ func (r *BGPSyncReconciler) buildBGPCondition(
 	for _, subnet := range subnetsWithBGP {
 		advName := r.advertisementName(dp.Name, subnet.Name)
 		adv := &unstructured.Unstructured{}
-		adv.SetGroupVersionKind(CiliumBGPAdvertisementGVK)
+		adv.SetGroupVersionKind(r.bgpAdvGVK())
 		if err := r.Get(ctx, types.NamespacedName{Name: advName}, adv); err != nil {
 			allReady = false
 			break
@@ -400,18 +406,20 @@ func (r *BGPSyncReconciler) buildBGPCondition(
 
 	if allReady {
 		return metav1.Condition{
-			Type:    dynamicprefixiov1alpha1.ConditionTypeBGPAdvertisementReady,
-			Status:  metav1.ConditionTrue,
-			Reason:  "AdvertisementsReady",
-			Message: fmt.Sprintf("%d BGP advertisement(s) configured", len(subnetsWithBGP)),
+			Type:               dynamicprefixiov1alpha1.ConditionTypeBGPAdvertisementReady,
+			Status:             metav1.ConditionTrue,
+			Reason:             "AdvertisementsReady",
+			Message:            fmt.Sprintf("%d BGP advertisement(s) configured", len(subnetsWithBGP)),
+			LastTransitionTime: metav1.Now(),
 		}
 	}
 
 	return metav1.Condition{
-		Type:    dynamicprefixiov1alpha1.ConditionTypeBGPAdvertisementReady,
-		Status:  metav1.ConditionFalse,
-		Reason:  "AdvertisementsPending",
-		Message: "Some BGP advertisements are not yet ready",
+		Type:               dynamicprefixiov1alpha1.ConditionTypeBGPAdvertisementReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             "AdvertisementsPending",
+		Message:            "Some BGP advertisements are not yet ready",
+		LastTransitionTime: metav1.Now(),
 	}
 }
 
@@ -425,24 +433,14 @@ func (r *BGPSyncReconciler) findCondition(conditions []metav1.Condition, conditi
 	return nil
 }
 
-// setCondition updates or adds a condition, preserving LastTransitionTime
-// when the status has not changed (per Kubernetes convention).
+// setCondition updates or adds a condition.
 func (r *BGPSyncReconciler) setCondition(conditions *[]metav1.Condition, condition metav1.Condition) {
-	now := metav1.Now()
 	for i := range *conditions {
 		if (*conditions)[i].Type == condition.Type {
-			if (*conditions)[i].Status == condition.Status {
-				// Status unchanged — preserve the existing transition time
-				condition.LastTransitionTime = (*conditions)[i].LastTransitionTime
-			} else {
-				condition.LastTransitionTime = now
-			}
 			(*conditions)[i] = condition
 			return
 		}
 	}
-	// New condition
-	condition.LastTransitionTime = now
 	*conditions = append(*conditions, condition)
 }
 
@@ -450,7 +448,7 @@ func (r *BGPSyncReconciler) setCondition(conditions *[]metav1.Condition, conditi
 func (r *BGPSyncReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Watch CiliumBGPAdvertisement for owned resources
 	bgpAdv := &unstructured.Unstructured{}
-	bgpAdv.SetGroupVersionKind(CiliumBGPAdvertisementGVK)
+	bgpAdv.SetGroupVersionKind(r.bgpAdvGVK())
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("bgpsync").
@@ -458,7 +456,7 @@ func (r *BGPSyncReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(bgpAdv).
 		Watches(&unstructured.Unstructured{
 			Object: map[string]interface{}{
-				"apiVersion": "cilium.io/v2alpha1",
+				"apiVersion": APIVersion(r.lbIPPoolGVK()),
 				"kind":       "CiliumLoadBalancerIPPool",
 			},
 		}, handler.EnqueueRequestsFromMapFunc(r.findDynamicPrefixForPool),

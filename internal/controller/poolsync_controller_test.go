@@ -81,7 +81,7 @@ var _ = Describe("PoolSync Controller", func() {
 
 			// Create CiliumLoadBalancerIPPool
 			pool := &unstructured.Unstructured{}
-			pool.SetGroupVersionKind(CiliumLBIPPoolGVK)
+			pool.SetGroupVersionKind(DefaultCiliumLBIPPoolGVK)
 			pool.SetName(poolName)
 			pool.SetAnnotations(map[string]string{
 				AnnotationName:   dpName,
@@ -96,7 +96,7 @@ var _ = Describe("PoolSync Controller", func() {
 		AfterEach(func() {
 			// Cleanup
 			pool := &unstructured.Unstructured{}
-			pool.SetGroupVersionKind(CiliumLBIPPoolGVK)
+			pool.SetGroupVersionKind(DefaultCiliumLBIPPoolGVK)
 			pool.SetName(poolName)
 			_ = k8sClient.Delete(ctx, pool)
 
@@ -118,7 +118,7 @@ var _ = Describe("PoolSync Controller", func() {
 
 			// Fetch updated pool
 			pool := &unstructured.Unstructured{}
-			pool.SetGroupVersionKind(CiliumLBIPPoolGVK)
+			pool.SetGroupVersionKind(DefaultCiliumLBIPPoolGVK)
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: poolName}, pool)).To(Succeed())
 
 			// Check spec.blocks
@@ -185,7 +185,7 @@ var _ = Describe("PoolSync Controller", func() {
 
 			// Create CiliumCIDRGroup
 			group := &unstructured.Unstructured{}
-			group.SetGroupVersionKind(CiliumCIDRGroupGVK)
+			group.SetGroupVersionKind(DefaultCiliumCIDRGroupGVK)
 			group.SetName(groupName)
 			group.SetAnnotations(map[string]string{
 				AnnotationName:   dpName,
@@ -200,7 +200,7 @@ var _ = Describe("PoolSync Controller", func() {
 		AfterEach(func() {
 			// Cleanup
 			group := &unstructured.Unstructured{}
-			group.SetGroupVersionKind(CiliumCIDRGroupGVK)
+			group.SetGroupVersionKind(DefaultCiliumCIDRGroupGVK)
 			group.SetName(groupName)
 			_ = k8sClient.Delete(ctx, group)
 
@@ -222,7 +222,7 @@ var _ = Describe("PoolSync Controller", func() {
 
 			// Fetch updated group
 			group := &unstructured.Unstructured{}
-			group.SetGroupVersionKind(CiliumCIDRGroupGVK)
+			group.SetGroupVersionKind(DefaultCiliumCIDRGroupGVK)
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: groupName}, group)).To(Succeed())
 
 			// Check spec.externalCIDRs
@@ -272,7 +272,7 @@ var _ = Describe("PoolSync Controller", func() {
 
 			// Create CiliumLoadBalancerIPPool without subnet annotation
 			pool := &unstructured.Unstructured{}
-			pool.SetGroupVersionKind(CiliumLBIPPoolGVK)
+			pool.SetGroupVersionKind(DefaultCiliumLBIPPoolGVK)
 			pool.SetName(poolName)
 			pool.SetAnnotations(map[string]string{
 				AnnotationName: dpName,
@@ -285,7 +285,7 @@ var _ = Describe("PoolSync Controller", func() {
 
 		AfterEach(func() {
 			pool := &unstructured.Unstructured{}
-			pool.SetGroupVersionKind(CiliumLBIPPoolGVK)
+			pool.SetGroupVersionKind(DefaultCiliumLBIPPoolGVK)
 			pool.SetName(poolName)
 			_ = k8sClient.Delete(ctx, pool)
 
@@ -307,7 +307,7 @@ var _ = Describe("PoolSync Controller", func() {
 
 			// Fetch updated pool
 			pool := &unstructured.Unstructured{}
-			pool.SetGroupVersionKind(CiliumLBIPPoolGVK)
+			pool.SetGroupVersionKind(DefaultCiliumLBIPPoolGVK)
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: poolName}, pool)).To(Succeed())
 
 			// Check spec.blocks uses main prefix
@@ -355,24 +355,24 @@ func TestAnnotationConstants(t *testing.T) {
 }
 
 func TestGVKConstants(t *testing.T) {
-	if CiliumLBIPPoolGVK.Group != "cilium.io" {
-		t.Errorf("CiliumLBIPPoolGVK.Group = %q, want %q", CiliumLBIPPoolGVK.Group, "cilium.io")
+	if DefaultCiliumLBIPPoolGVK.Group != "cilium.io" {
+		t.Errorf("DefaultCiliumLBIPPoolGVK.Group = %q, want %q", DefaultCiliumLBIPPoolGVK.Group, "cilium.io")
 	}
-	if CiliumLBIPPoolGVK.Version != "v2alpha1" {
-		t.Errorf("CiliumLBIPPoolGVK.Version = %q, want %q", CiliumLBIPPoolGVK.Version, "v2alpha1")
+	if DefaultCiliumLBIPPoolGVK.Version != "v2" {
+		t.Errorf("DefaultCiliumLBIPPoolGVK.Version = %q, want %q", DefaultCiliumLBIPPoolGVK.Version, "v2")
 	}
-	if CiliumLBIPPoolGVK.Kind != "CiliumLoadBalancerIPPool" {
-		t.Errorf("CiliumLBIPPoolGVK.Kind = %q, want %q", CiliumLBIPPoolGVK.Kind, "CiliumLoadBalancerIPPool")
+	if DefaultCiliumLBIPPoolGVK.Kind != "CiliumLoadBalancerIPPool" {
+		t.Errorf("DefaultCiliumLBIPPoolGVK.Kind = %q, want %q", DefaultCiliumLBIPPoolGVK.Kind, "CiliumLoadBalancerIPPool")
 	}
 
-	if CiliumCIDRGroupGVK.Group != "cilium.io" {
-		t.Errorf("CiliumCIDRGroupGVK.Group = %q, want %q", CiliumCIDRGroupGVK.Group, "cilium.io")
+	if DefaultCiliumCIDRGroupGVK.Group != "cilium.io" {
+		t.Errorf("DefaultCiliumCIDRGroupGVK.Group = %q, want %q", DefaultCiliumCIDRGroupGVK.Group, "cilium.io")
 	}
-	if CiliumCIDRGroupGVK.Version != "v2alpha1" {
-		t.Errorf("CiliumCIDRGroupGVK.Version = %q, want %q", CiliumCIDRGroupGVK.Version, "v2alpha1")
+	if DefaultCiliumCIDRGroupGVK.Version != "v2" {
+		t.Errorf("DefaultCiliumCIDRGroupGVK.Version = %q, want %q", DefaultCiliumCIDRGroupGVK.Version, "v2")
 	}
-	if CiliumCIDRGroupGVK.Kind != "CiliumCIDRGroup" {
-		t.Errorf("CiliumCIDRGroupGVK.Kind = %q, want %q", CiliumCIDRGroupGVK.Kind, "CiliumCIDRGroup")
+	if DefaultCiliumCIDRGroupGVK.Kind != "CiliumCIDRGroup" {
+		t.Errorf("DefaultCiliumCIDRGroupGVK.Kind = %q, want %q", DefaultCiliumCIDRGroupGVK.Kind, "CiliumCIDRGroup")
 	}
 }
 

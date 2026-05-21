@@ -97,7 +97,7 @@ var _ = Describe("BGPSync Controller", func() {
 
 			// Cleanup CiliumBGPAdvertisement
 			adv := &unstructured.Unstructured{}
-			adv.SetGroupVersionKind(CiliumBGPAdvertisementGVK)
+			adv.SetGroupVersionKind(DefaultCiliumBGPAdvertisementGVK)
 			adv.SetName("dp-" + dpName + "-" + subnetName)
 			_ = k8sClient.Delete(ctx, adv)
 		})
@@ -115,7 +115,7 @@ var _ = Describe("BGPSync Controller", func() {
 
 			// Verify CiliumBGPAdvertisement was created
 			adv := &unstructured.Unstructured{}
-			adv.SetGroupVersionKind(CiliumBGPAdvertisementGVK)
+			adv.SetGroupVersionKind(DefaultCiliumBGPAdvertisementGVK)
 			advName := "dp-" + dpName + "-" + subnetName
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: advName}, adv)).To(Succeed())
 
@@ -319,7 +319,7 @@ var _ = Describe("BGPSync Controller", func() {
 
 			// Verify advertisement exists
 			adv := &unstructured.Unstructured{}
-			adv.SetGroupVersionKind(CiliumBGPAdvertisementGVK)
+			adv.SetGroupVersionKind(DefaultCiliumBGPAdvertisementGVK)
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "dp-" + dpName + "-" + subnetName}, adv)).To(Succeed())
 		})
 
@@ -329,7 +329,7 @@ var _ = Describe("BGPSync Controller", func() {
 			_ = k8sClient.Delete(ctx, dp)
 
 			adv := &unstructured.Unstructured{}
-			adv.SetGroupVersionKind(CiliumBGPAdvertisementGVK)
+			adv.SetGroupVersionKind(DefaultCiliumBGPAdvertisementGVK)
 			adv.SetName("dp-" + dpName + "-" + subnetName)
 			_ = k8sClient.Delete(ctx, adv)
 		})
@@ -354,7 +354,7 @@ var _ = Describe("BGPSync Controller", func() {
 
 			// Verify advertisement was deleted
 			adv := &unstructured.Unstructured{}
-			adv.SetGroupVersionKind(CiliumBGPAdvertisementGVK)
+			adv.SetGroupVersionKind(DefaultCiliumBGPAdvertisementGVK)
 			err = k8sClient.Get(ctx, types.NamespacedName{Name: "dp-" + dpName + "-" + subnetName}, adv)
 			Expect(err).To(HaveOccurred())
 		})
@@ -370,8 +370,8 @@ func newTestScheme() *runtime.Scheme {
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = dynamicprefixiov1alpha1.AddToScheme(scheme)
 	// Register unstructured types for Cilium resources
-	scheme.AddKnownTypeWithName(CiliumBGPAdvertisementGVK, &unstructured.Unstructured{})
-	scheme.AddKnownTypeWithName(CiliumLBIPPoolGVK, &unstructured.Unstructured{})
+	scheme.AddKnownTypeWithName(DefaultCiliumBGPAdvertisementGVK, &unstructured.Unstructured{})
+	scheme.AddKnownTypeWithName(DefaultCiliumLBIPPoolGVK, &unstructured.Unstructured{})
 	return scheme
 }
 
@@ -437,7 +437,7 @@ func TestBGPSyncReconciler_Reconcile_CreateAdvertisement(t *testing.T) {
 	// Verify CiliumBGPAdvertisement was created
 	advName := "dp-test-dp-loadbalancers"
 	adv := &unstructured.Unstructured{}
-	adv.SetGroupVersionKind(CiliumBGPAdvertisementGVK)
+	adv.SetGroupVersionKind(DefaultCiliumBGPAdvertisementGVK)
 	err = fakeClient.Get(ctx, types.NamespacedName{Name: advName}, adv)
 	if err != nil {
 		t.Fatalf("Failed to get CiliumBGPAdvertisement: %v", err)
@@ -697,7 +697,7 @@ func TestBGPSyncReconciler_Reconcile_DeleteOrphaned(t *testing.T) {
 	// Create an orphaned advertisement (from when BGP was enabled)
 	orphanedAdv := &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "cilium.io/v2alpha1",
+			"apiVersion": "cilium.io/v2",
 			"kind":       "CiliumBGPAdvertisement",
 			"metadata": map[string]interface{}{
 				"name": "dp-test-dp-orphan-was-bgp",
@@ -738,7 +738,7 @@ func TestBGPSyncReconciler_Reconcile_DeleteOrphaned(t *testing.T) {
 
 	// Verify orphaned advertisement was deleted
 	adv := &unstructured.Unstructured{}
-	adv.SetGroupVersionKind(CiliumBGPAdvertisementGVK)
+	adv.SetGroupVersionKind(DefaultCiliumBGPAdvertisementGVK)
 	err = fakeClient.Get(ctx, types.NamespacedName{Name: "dp-test-dp-orphan-was-bgp"}, adv)
 	if err == nil {
 		t.Error("Expected orphaned advertisement to be deleted, but it still exists")
@@ -789,7 +789,7 @@ func TestBGPSyncReconciler_Reconcile_WithPoolSelector(t *testing.T) {
 	// Create a CiliumLoadBalancerIPPool with serviceSelector
 	pool := &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "cilium.io/v2alpha1",
+			"apiVersion": "cilium.io/v2",
 			"kind":       "CiliumLoadBalancerIPPool",
 			"metadata": map[string]interface{}{
 				"name": "test-pool",
@@ -831,7 +831,7 @@ func TestBGPSyncReconciler_Reconcile_WithPoolSelector(t *testing.T) {
 	// Verify CiliumBGPAdvertisement was created with selector
 	advName := "dp-test-dp-selector-with-selector"
 	adv := &unstructured.Unstructured{}
-	adv.SetGroupVersionKind(CiliumBGPAdvertisementGVK)
+	adv.SetGroupVersionKind(DefaultCiliumBGPAdvertisementGVK)
 	err = fakeClient.Get(ctx, types.NamespacedName{Name: advName}, adv)
 	if err != nil {
 		t.Fatalf("Failed to get CiliumBGPAdvertisement: %v", err)
@@ -1081,22 +1081,22 @@ func TestBuildAdvertisementSpec(t *testing.T) {
 	}
 }
 
-func TestCiliumBGPAdvertisementGVK(t *testing.T) {
+func TestDefaultCiliumBGPAdvertisementGVK(t *testing.T) {
 	// Expected values for GVK verification
 	const (
 		expectedGroup   = "cilium.io"
-		expectedVersion = "v2alpha1"
+		expectedVersion = "v2"
 		expectedKind    = "CiliumBGPAdvertisement"
 	)
 
-	if CiliumBGPAdvertisementGVK.Group != expectedGroup {
-		t.Errorf("CiliumBGPAdvertisementGVK.Group = %q, want %q", CiliumBGPAdvertisementGVK.Group, expectedGroup)
+	if DefaultCiliumBGPAdvertisementGVK.Group != expectedGroup {
+		t.Errorf("DefaultCiliumBGPAdvertisementGVK.Group = %q, want %q", DefaultCiliumBGPAdvertisementGVK.Group, expectedGroup)
 	}
-	if CiliumBGPAdvertisementGVK.Version != expectedVersion {
-		t.Errorf("CiliumBGPAdvertisementGVK.Version = %q, want %q", CiliumBGPAdvertisementGVK.Version, expectedVersion)
+	if DefaultCiliumBGPAdvertisementGVK.Version != expectedVersion {
+		t.Errorf("DefaultCiliumBGPAdvertisementGVK.Version = %q, want %q", DefaultCiliumBGPAdvertisementGVK.Version, expectedVersion)
 	}
-	if CiliumBGPAdvertisementGVK.Kind != expectedKind {
-		t.Errorf("CiliumBGPAdvertisementGVK.Kind = %q, want %q", CiliumBGPAdvertisementGVK.Kind, expectedKind)
+	if DefaultCiliumBGPAdvertisementGVK.Kind != expectedKind {
+		t.Errorf("DefaultCiliumBGPAdvertisementGVK.Kind = %q, want %q", DefaultCiliumBGPAdvertisementGVK.Kind, expectedKind)
 	}
 }
 

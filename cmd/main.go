@@ -19,6 +19,7 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -27,6 +28,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -182,6 +184,19 @@ func main() {
 	// Create the receiver factory for prefix acquisition
 	receiverFactory := prefix.NewReceiverFactory()
 
+	// Discover available Cilium API versions
+	restConfig := ctrl.GetConfigOrDie()
+	clientset, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		setupLog.Error(err, "unable to create kubernetes clientset")
+		os.Exit(1)
+	}
+
+	ciliumVersions, err := controller.DiscoverCiliumVersions(clientset.Discovery())
+	if err != nil {
+		setupLog.Info("Cilium API not available at startup, will poll in background", "reason", err.Error())
+	}
+
 	// Set up DynamicPrefix controller with receiver factory
 	dynamicPrefixReconciler := controller.NewDynamicPrefixReconciler(
 		mgr.GetClient(),
@@ -190,15 +205,6 @@ func main() {
 	dynamicPrefixReconciler.ReceiverFactory = receiverFactory
 	if err := dynamicPrefixReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DynamicPrefix")
-		os.Exit(1)
-	}
-
-	// Set up PoolSync controller for Cilium resource synchronization
-	if err := (&controller.PoolSyncReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "PoolSync")
 		os.Exit(1)
 	}
 
@@ -211,13 +217,41 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Set up BGPSync controller for BGP advertisement management
-	if err := (&controller.BGPSyncReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "BGPSync")
-		os.Exit(1)
+	// setupCiliumControllers registers PoolSync and BGPSync with the manager.
+	setupCiliumControllers := func(versions *controller.CiliumVersions) error {
+		if err := (&controller.PoolSyncReconciler{
+			Client:         mgr.GetClient(),
+			Scheme:         mgr.GetScheme(),
+			CiliumVersions: versions,
+		}).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("unable to create PoolSync controller: %w", err)
+		}
+
+		if err := (&controller.BGPSyncReconciler{
+			Client:         mgr.GetClient(),
+			Scheme:         mgr.GetScheme(),
+			CiliumVersions: versions,
+		}).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("unable to create BGPSync controller: %w", err)
+		}
+
+		return nil
+	}
+
+	// Set up Cilium-dependent controllers immediately or defer to background poller.
+	if ciliumVersions != nil {
+		if err := setupCiliumControllers(ciliumVersions); err != nil {
+			setupLog.Error(err, "unable to set up Cilium controllers")
+			os.Exit(1)
+		}
+	} else {
+		if err := mgr.Add(&controller.CiliumControllerStarter{
+			Discovery:        clientset.Discovery(),
+			SetupControllers: setupCiliumControllers,
+		}); err != nil {
+			setupLog.Error(err, "unable to add Cilium controller starter")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 
