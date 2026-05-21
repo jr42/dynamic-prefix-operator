@@ -243,6 +243,26 @@ var _ = Describe("ServiceSync Controller", func() {
 			Expect(ipsAnnotation).To(ContainSubstring("2001:db8:1::beef:42"))
 			Expect(ipsAnnotation).To(ContainSubstring("2001:db8:2::beef:42"))
 		})
+
+		It("should skip external-dns target updates when explicitly disabled", func() {
+			svc := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: serviceName, Namespace: serviceNS}, svc)).To(Succeed())
+
+			annotations := svc.GetAnnotations()
+			annotations[AnnotationSkipExternalDNSUpdate] = "true"
+			annotations[AnnotationExternalDNSTarget] = "existing.example.com"
+			svc.SetAnnotations(annotations)
+			Expect(k8sClient.Update(ctx, svc)).To(Succeed())
+
+			reconciler := &ServiceSyncReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: serviceName, Namespace: serviceNS}})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: serviceName, Namespace: serviceNS}, svc)).To(Succeed())
+			Expect(svc.GetAnnotations()[AnnotationExternalDNSTarget]).To(Equal("existing.example.com"))
+			Expect(svc.GetAnnotations()[AnnotationCiliumIPs]).To(ContainSubstring(currentIP))
+			Expect(svc.GetAnnotations()[AnnotationCiliumIPs]).To(ContainSubstring(historicalIP))
+		})
 	})
 
 	Context("When reconciling a Service in simple mode", func() {
@@ -811,6 +831,11 @@ func TestServiceSyncAnnotationConstants(t *testing.T) {
 			name:     "AnnotationSuffix",
 			constant: AnnotationSuffix,
 			expected: "dynamic-prefix.io/suffix",
+		},
+		{
+			name:     "AnnotationSkipExternalDNSUpdate",
+			constant: AnnotationSkipExternalDNSUpdate,
+			expected: "dynamic-prefix.io/skip-external-dns-update",
 		},
 	}
 
