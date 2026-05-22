@@ -59,6 +59,9 @@ const (
 	// (and historical) prefix with this suffix, instead of inferring it from the
 	// Service's currently assigned IP.
 	AnnotationSuffix = "dynamic-prefix.io/suffix"
+
+	// serviceDynamicPrefixIndex indexes Services by the DynamicPrefix they reference.
+	serviceDynamicPrefixIndex = "metadata.annotations.dynamic-prefix.io/name"
 )
 
 // ServiceSyncReconciler reconciles LoadBalancer Services for HA mode prefix transitions.
@@ -557,6 +560,10 @@ func (r *ServiceSyncReconciler) applyIPOffset(base netip.Addr, offset [16]byte) 
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ServiceSyncReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.Service{}, serviceDynamicPrefixIndex, indexServiceByDynamicPrefix); err != nil {
+		return fmt.Errorf("failed to index Services by DynamicPrefix annotation: %w", err)
+	}
+
 	// Create predicate for LoadBalancer Services with dynamic-prefix.io/name annotation
 	hasAnnotation := predicate.NewPredicateFuncs(func(obj client.Object) bool {
 		svc, ok := obj.(*corev1.Service)
@@ -581,6 +588,20 @@ func (r *ServiceSyncReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+func indexServiceByDynamicPrefix(obj client.Object) []string {
+	svc, ok := obj.(*corev1.Service)
+	if !ok || svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
+		return nil
+	}
+
+	annotations := svc.GetAnnotations()
+	if annotations == nil || annotations[AnnotationName] == "" {
+		return nil
+	}
+
+	return []string{annotations[AnnotationName]}
+}
+
 // findReferencingServices finds all Services that reference the given DynamicPrefix.
 func (r *ServiceSyncReconciler) findReferencingServices(ctx context.Context, obj client.Object) []reconcile.Request {
 	dp, ok := obj.(*dynamicprefixiov1alpha1.DynamicPrefix)
@@ -596,9 +617,9 @@ func (r *ServiceSyncReconciler) findReferencingServices(ctx context.Context, obj
 	log := logf.FromContext(ctx)
 	var requests []reconcile.Request
 
-	// List all Services
+	// List only Services that the field index says reference this DynamicPrefix.
 	var serviceList corev1.ServiceList
-	if err := r.List(ctx, &serviceList); err != nil {
+	if err := r.List(ctx, &serviceList, client.MatchingFields{serviceDynamicPrefixIndex: dp.Name}); err != nil {
 		log.V(1).Info("Failed to list Services", "error", err)
 		return nil
 	}

@@ -56,6 +56,9 @@ spec:
             {{- end }}
             - --health-probe-bind-address={{ .Values.config.health.bindAddress }}
             - --zap-log-level={{ .Values.config.logLevel }}
+            {{- with .Values.config.serviceSync.cacheLabelSelector }}
+            - --service-cache-label-selector={{ . | quote }}
+            {{- end }}
           {{- with .Values.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}

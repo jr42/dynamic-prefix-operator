@@ -100,6 +100,13 @@ config:
     # -- Health probe bind address
     bindAddress: ":8081"
 
+  # -- ServiceSync controller configuration
+  serviceSync:
+    # -- Optional label selector limiting the Service informer cache.
+    # Leave empty to preserve backwards-compatible cluster-wide Service cache behavior.
+    # Example: dynamic-prefix.io/name caches only Services labeled with that key.
+    cacheLabelSelector: ""
+
 # ==============================================================================
 # Network Configuration
 # ==============================================================================

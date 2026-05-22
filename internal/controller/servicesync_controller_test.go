@@ -26,7 +26,10 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dynamicprefixiov1alpha1 "github.com/jr42/dynamic-prefix-operator/api/v1alpha1"
@@ -820,5 +823,108 @@ func TestServiceSyncAnnotationConstants(t *testing.T) {
 				t.Errorf("%s = %q, want %q", tt.name, tt.constant, tt.expected)
 			}
 		})
+	}
+}
+
+func TestIndexServiceByDynamicPrefix(t *testing.T) {
+	tests := []struct {
+		name     string
+		svc      *corev1.Service
+		expected []string
+	}{
+		{
+			name: "loadbalancer with DynamicPrefix annotation",
+			svc: &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{AnnotationName: "home-ipv6"}},
+				Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+			},
+			expected: []string{"home-ipv6"},
+		},
+		{
+			name: "clusterip ignored",
+			svc: &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{AnnotationName: "home-ipv6"}},
+				Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP},
+			},
+		},
+		{
+			name: "missing annotation ignored",
+			svc:  &corev1.Service{Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer}},
+		},
+		{
+			name: "empty annotation ignored",
+			svc: &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{AnnotationName: ""}},
+				Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := indexServiceByDynamicPrefix(tt.svc)
+			if len(result) != len(tt.expected) {
+				t.Fatalf("indexServiceByDynamicPrefix() returned %v, want %v", result, tt.expected)
+			}
+			for i := range result {
+				if result[i] != tt.expected[i] {
+					t.Errorf("indexServiceByDynamicPrefix()[%d] = %q, want %q", i, result[i], tt.expected[i])
+				}
+			}
+		})
+	}
+}
+
+func TestServiceSyncReconciler_findReferencingServicesUsesIndex(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(scheme)
+	_ = dynamicprefixiov1alpha1.AddToScheme(scheme)
+
+	dp := &dynamicprefixiov1alpha1.DynamicPrefix{
+		ObjectMeta: metav1.ObjectMeta{Name: "home-ipv6"},
+		Spec: dynamicprefixiov1alpha1.DynamicPrefixSpec{
+			Transition: &dynamicprefixiov1alpha1.TransitionSpec{Mode: dynamicprefixiov1alpha1.TransitionModeHA},
+		},
+	}
+	managed := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "managed",
+			Namespace:   "default",
+			Annotations: map[string]string{AnnotationName: "home-ipv6"},
+		},
+		Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+	}
+	otherDP := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "other-dp",
+			Namespace:   "default",
+			Annotations: map[string]string{AnnotationName: "other-ipv6"},
+		},
+		Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+	}
+	clusterIP := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "clusterip",
+			Namespace:   "default",
+			Annotations: map[string]string{AnnotationName: "home-ipv6"},
+		},
+		Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(dp, managed, otherDP, clusterIP).
+		WithIndex(&corev1.Service{}, serviceDynamicPrefixIndex, indexServiceByDynamicPrefix).
+		Build()
+
+	reconciler := &ServiceSyncReconciler{Client: fakeClient, Scheme: scheme}
+	requests := reconciler.findReferencingServices(ctx, dp)
+
+	if len(requests) != 1 {
+		t.Fatalf("findReferencingServices() returned %d requests, want 1: %v", len(requests), requests)
+	}
+	if requests[0].NamespacedName != (types.NamespacedName{Name: "managed", Namespace: "default"}) {
+		t.Errorf("findReferencingServices()[0] = %v, want default/managed", requests[0].NamespacedName)
 	}
 }

@@ -84,6 +84,19 @@ helm install dynamic-prefix-operator ./charts/dynamic-prefix-operator \
   --set serviceMonitor.enabled=true
 ```
 
+#### Limit the Service informer cache
+
+For large clusters, label HA-managed Services and restrict the Service informer
+cache to those opt-in Services:
+
+```bash
+helm install dynamic-prefix-operator ./charts/dynamic-prefix-operator \
+  --set 'config.serviceSync.cacheLabelSelector=dynamic-prefix.io/name'
+```
+
+Services still use the `dynamic-prefix.io/name` annotation for configuration;
+the matching label is only used to narrow the informer cache.
+
 #### High availability setup
 
 ```bash
@@ -123,6 +136,7 @@ helm install dynamic-prefix-operator ./charts/dynamic-prefix-operator \
 | `config.logLevel` | Log level | `info` |
 | `config.leaderElection.enabled` | Enable leader election | `true` |
 | `config.metrics.enabled` | Enable metrics endpoint | `true` |
+| `config.serviceSync.cacheLabelSelector` | Optional label selector for the Service informer cache | `""` |
 
 ### Monitoring
 

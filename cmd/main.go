@@ -21,6 +21,9 @@ import (
 	"flag"
 	"os"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
+
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -29,6 +32,8 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -62,6 +67,7 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var serviceCacheLabelSelector string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -80,6 +86,8 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&serviceCacheLabelSelector, "service-cache-label-selector", "",
+		"Optional Kubernetes label selector limiting the Service informer cache, for example dynamic-prefix.io/name")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -155,8 +163,23 @@ func main() {
 		metricsServerOptions.KeyName = metricsCertKey
 	}
 
+	cacheOptions := cache.Options{}
+	if serviceCacheLabelSelector != "" {
+		selector, err := labels.Parse(serviceCacheLabelSelector)
+		if err != nil {
+			setupLog.Error(err, "invalid service cache label selector", "selector", serviceCacheLabelSelector)
+			os.Exit(1)
+		}
+
+		cacheOptions.ByObject = map[client.Object]cache.ByObject{
+			&corev1.Service{}: {Label: selector},
+		}
+		setupLog.Info("restricting Service informer cache", "selector", serviceCacheLabelSelector)
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
+		Cache:                  cacheOptions,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
