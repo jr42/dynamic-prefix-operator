@@ -18,6 +18,7 @@ package prefix
 
 import (
 	"fmt"
+	"sync"
 
 	dynamicprefixiov1alpha1 "github.com/jr42/dynamic-prefix-operator/api/v1alpha1"
 )
@@ -29,11 +30,19 @@ type ReceiverFactory interface {
 }
 
 // DefaultReceiverFactory is the default implementation of ReceiverFactory.
-type DefaultReceiverFactory struct{}
+type DefaultReceiverFactory struct {
+	mu            sync.Mutex
+	raReceivers   *sharedRAReceiverPool
+	newRAReceiver func(iface string) Receiver
+}
 
 // NewReceiverFactory creates a new DefaultReceiverFactory.
 func NewReceiverFactory() *DefaultReceiverFactory {
-	return &DefaultReceiverFactory{}
+	return &DefaultReceiverFactory{
+		newRAReceiver: func(iface string) Receiver {
+			return NewRAReceiver(iface)
+		},
+	}
 }
 
 // CreateReceiver creates a Receiver based on the AcquisitionSpec.
@@ -75,12 +84,12 @@ func (f *DefaultReceiverFactory) createDHCPv6PDReceiver(spec *dynamicprefixiov1a
 }
 
 // createRAReceiver creates a Router Advertisement receiver from the spec.
-func (f *DefaultReceiverFactory) createRAReceiver(spec *dynamicprefixiov1alpha1.RouterAdvertisementSpec) (*RAReceiver, error) {
+func (f *DefaultReceiverFactory) createRAReceiver(spec *dynamicprefixiov1alpha1.RouterAdvertisementSpec) (Receiver, error) {
 	if spec.Interface == "" {
 		return nil, fmt.Errorf("router advertisement interface is required")
 	}
 
-	return NewRAReceiver(spec.Interface), nil
+	return f.sharedRAPool().subscribe(spec.Interface), nil
 }
 
 // createCompositeReceiver creates a composite receiver with DHCPv6-PD as primary and RA as fallback.
@@ -96,4 +105,20 @@ func (f *DefaultReceiverFactory) createCompositeReceiver(spec dynamicprefixiov1a
 	}
 
 	return NewCompositeReceiver(primary, fallback), nil
+}
+
+func (f *DefaultReceiverFactory) sharedRAPool() *sharedRAReceiverPool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.newRAReceiver == nil {
+		f.newRAReceiver = func(iface string) Receiver {
+			return NewRAReceiver(iface)
+		}
+	}
+	if f.raReceivers == nil {
+		f.raReceivers = newSharedRAReceiverPool(f.newRAReceiver)
+	}
+
+	return f.raReceivers
 }
