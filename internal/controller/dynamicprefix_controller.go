@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -106,13 +107,15 @@ func (r *DynamicPrefixReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
+	originalStatus := dp.Status.DeepCopy()
+
 	// Get or create the receiver for this DynamicPrefix
 	receiver, err := r.getOrCreateReceiver(ctx, &dp)
 	if err != nil {
 		log.Error(err, "Failed to create receiver")
 		r.setCondition(&dp, dynamicprefixiov1alpha1.ConditionTypePrefixAcquired, metav1.ConditionFalse,
 			"ReceiverCreationFailed", err.Error())
-		if statusErr := r.Status().Update(ctx, &dp); statusErr != nil {
+		if statusErr := r.updateStatusIfChanged(ctx, &dp, originalStatus); statusErr != nil {
 			log.Error(statusErr, "Failed to update status")
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
@@ -124,7 +127,7 @@ func (r *DynamicPrefixReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		log.Info("No prefix acquired yet")
 		r.setCondition(&dp, dynamicprefixiov1alpha1.ConditionTypePrefixAcquired, metav1.ConditionFalse,
 			"WaitingForPrefix", "Waiting to receive prefix from upstream")
-		if err := r.Status().Update(ctx, &dp); err != nil {
+		if err := r.updateStatusIfChanged(ctx, &dp, originalStatus); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -175,14 +178,26 @@ func (r *DynamicPrefixReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	r.setCondition(&dp, dynamicprefixiov1alpha1.ConditionTypePrefixAcquired, metav1.ConditionTrue,
 		"PrefixAcquired", fmt.Sprintf("Prefix %s acquired via %s", currentPrefix.Network, receiver.Source()))
 
-	// Update status
-	if err := r.Status().Update(ctx, &dp); err != nil {
+	// Update status only when it actually changed to avoid self-triggered reconcile loops.
+	if err := r.updateStatusIfChanged(ctx, &dp, originalStatus); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	// Requeue to handle lease renewal
 	requeueAfter := r.calculateRequeueTime(currentPrefix)
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+}
+
+// updateStatusIfChanged writes the DynamicPrefix status only when a semantic change occurred.
+func (r *DynamicPrefixReconciler) updateStatusIfChanged(
+	ctx context.Context,
+	dp *dynamicprefixiov1alpha1.DynamicPrefix,
+	originalStatus *dynamicprefixiov1alpha1.DynamicPrefixStatus,
+) error {
+	if equality.Semantic.DeepEqual(originalStatus, &dp.Status) {
+		return nil
+	}
+	return r.Status().Update(ctx, dp)
 }
 
 // getOrCreateReceiver returns an existing receiver or creates a new one

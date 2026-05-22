@@ -145,6 +145,22 @@ var _ = Describe("BGPSync Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(found).To(BeTrue())
 			Expect(communities).To(ContainElement(community))
+
+			advResourceVersion := adv.GetResourceVersion()
+			var dp dynamicprefixiov1alpha1.DynamicPrefix
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: dpName}, &dp)).To(Succeed())
+			dpResourceVersion := dp.ResourceVersion
+
+			// A steady-state reconcile must not rewrite the advertisement or DynamicPrefix status.
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: dpName},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: advName}, adv)).To(Succeed())
+			Expect(adv.GetResourceVersion()).To(Equal(advResourceVersion))
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: dpName}, &dp)).To(Succeed())
+			Expect(dp.ResourceVersion).To(Equal(dpResourceVersion))
 		})
 
 		It("should update DynamicPrefix status with advertisement name and condition", func() {

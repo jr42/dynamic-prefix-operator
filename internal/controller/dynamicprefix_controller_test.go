@@ -114,6 +114,16 @@ var _ = Describe("DynamicPrefix Controller", func() {
 			Expect(updatedDP.Status.Subnets[1].Name).To(Equal("services"))
 			Expect(updatedDP.Status.Subnets[1].CIDR).To(Equal("2001:db8:0:1::/64"))
 
+			stableResourceVersion := updatedDP.ResourceVersion
+
+			// A steady-state reconcile must not write status again.
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			var stableDP dynamicprefixiov1alpha1.DynamicPrefix
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: dpName}, &stableDP)).Should(Succeed())
+			Expect(stableDP.ResourceVersion).To(Equal(stableResourceVersion))
+
 			// Cleanup
 			Expect(k8sClient.Delete(ctx, dp)).Should(Succeed())
 		})

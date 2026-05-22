@@ -179,6 +179,24 @@ var _ = Describe("ServiceSync Controller", func() {
 
 			// Should have last-sync annotation
 			Expect(annotations).To(HaveKey(AnnotationLastSync))
+			lastSync := annotations[AnnotationLastSync]
+			resourceVersion := svc.GetResourceVersion()
+
+			// A steady-state reconcile must not rewrite Service annotations.
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      serviceName,
+					Namespace: serviceNS,
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      serviceName,
+				Namespace: serviceNS,
+			}, svc)).To(Succeed())
+			Expect(svc.GetResourceVersion()).To(Equal(resourceVersion))
+			Expect(svc.GetAnnotations()[AnnotationLastSync]).To(Equal(lastSync))
 		})
 
 		It("should preserve IPv4 addresses in dual-stack annotation", func() {

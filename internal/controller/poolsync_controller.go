@@ -18,12 +18,11 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/netip"
-	"reflect"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -477,9 +476,7 @@ func (r *PoolSyncReconciler) updateLoadBalancerIPPool(ctx context.Context, pool 
 
 	// Check if blocks actually changed before updating to avoid feedback loops
 	currentBlocks, _, _ := unstructured.NestedSlice(pool.Object, "spec", "blocks")
-	existingJSON, _ := json.Marshal(currentBlocks)
-	newJSON, _ := json.Marshal(blocks)
-	if reflect.DeepEqual(existingJSON, newJSON) {
+	if equality.Semantic.DeepEqual(currentBlocks, blocks) {
 		log.V(2).Info("Pool blocks unchanged, skipping update", "pool", pool.GetName())
 		return nil
 	}
@@ -526,9 +523,7 @@ func (r *PoolSyncReconciler) updateCIDRGroup(ctx context.Context, pool *unstruct
 
 	// Check if CIDRs actually changed before updating to avoid feedback loops
 	currentCIDRs, _, _ := unstructured.NestedSlice(pool.Object, "spec", "externalCIDRs")
-	existingJSON, _ := json.Marshal(currentCIDRs)
-	newJSON, _ := json.Marshal(externalCIDRs)
-	if reflect.DeepEqual(existingJSON, newJSON) {
+	if equality.Semantic.DeepEqual(currentCIDRs, externalCIDRs) {
 		log.V(2).Info("CIDRGroup unchanged, skipping update", "cidrGroup", pool.GetName())
 		return nil
 	}

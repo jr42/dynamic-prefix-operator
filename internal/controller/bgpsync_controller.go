@@ -18,10 +18,9 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"reflect"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -187,9 +186,6 @@ func (r *BGPSyncReconciler) reconcileAdvertisement(
 		log.Info("Created CiliumBGPAdvertisement", "name", advName, "subnet", subnet.Name)
 	} else {
 		// Check if the spec or labels actually changed before updating
-		existingSpec, _ := json.Marshal(adv.Object["spec"])
-		newSpecJSON, _ := json.Marshal(advSpec)
-
 		labels := adv.GetLabels()
 		if labels == nil {
 			labels = make(map[string]string)
@@ -198,7 +194,7 @@ func (r *BGPSyncReconciler) reconcileAdvertisement(
 			labels[LabelDynamicPrefixName] != dp.Name ||
 			labels[LabelSubnetName] != subnet.Name
 
-		if !reflect.DeepEqual(existingSpec, newSpecJSON) || labelsChanged {
+		if !equality.Semantic.DeepEqual(adv.Object["spec"], advSpec) || labelsChanged {
 			adv.Object["spec"] = advSpec
 			labels[LabelManagedBy] = LabelManagedByValue
 			labels[LabelDynamicPrefixName] = dp.Name

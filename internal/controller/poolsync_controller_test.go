@@ -133,6 +133,18 @@ var _ = Describe("PoolSync Controller", func() {
 			// Check last-sync annotation
 			annotations := pool.GetAnnotations()
 			Expect(annotations).To(HaveKey(AnnotationLastSync))
+			lastSync := annotations[AnnotationLastSync]
+			resourceVersion := pool.GetResourceVersion()
+
+			// A steady-state reconcile must not write the pool again.
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: poolName},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: poolName}, pool)).To(Succeed())
+			Expect(pool.GetResourceVersion()).To(Equal(resourceVersion))
+			Expect(pool.GetAnnotations()[AnnotationLastSync]).To(Equal(lastSync))
 		})
 	})
 
@@ -235,6 +247,18 @@ var _ = Describe("PoolSync Controller", func() {
 			// Check last-sync annotation
 			annotations := group.GetAnnotations()
 			Expect(annotations).To(HaveKey(AnnotationLastSync))
+			lastSync := annotations[AnnotationLastSync]
+			resourceVersion := group.GetResourceVersion()
+
+			// A steady-state reconcile must not write the CIDRGroup again.
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: groupName},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: groupName}, group)).To(Succeed())
+			Expect(group.GetResourceVersion()).To(Equal(resourceVersion))
+			Expect(group.GetAnnotations()[AnnotationLastSync]).To(Equal(lastSync))
 		})
 	})
 
