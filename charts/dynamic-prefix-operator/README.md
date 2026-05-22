@@ -163,7 +163,7 @@ spec:
 Then annotate resources you want the operator to manage:
 
 ```yaml
-apiVersion: cilium.io/v2alpha1
+apiVersion: cilium.io/v2
 kind: CiliumLoadBalancerIPPool
 metadata:
   name: ipv6-pool

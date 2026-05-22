@@ -83,7 +83,7 @@ spec:
 ### 3. Create a Cilium pool that references it
 
 ```yaml
-apiVersion: cilium.io/v2alpha1
+apiVersion: cilium.io/v2
 kind: CiliumLoadBalancerIPPool
 metadata:
   name: ipv6-lb-pool

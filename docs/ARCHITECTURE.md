@@ -163,7 +163,7 @@ When a prefix changes, pools retain blocks for both the current and historical p
 
 ```yaml
 # Pool references DynamicPrefix via annotation
-apiVersion: cilium.io/v2alpha1
+apiVersion: cilium.io/v2
 kind: CiliumLoadBalancerIPPool
 metadata:
   annotations:

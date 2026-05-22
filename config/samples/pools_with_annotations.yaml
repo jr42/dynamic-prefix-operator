@@ -13,7 +13,7 @@
 
 ---
 # Cilium LoadBalancer IP Pool using address range (Mode 1)
-apiVersion: cilium.io/v2alpha1
+apiVersion: cilium.io/v2
 kind: CiliumLoadBalancerIPPool
 metadata:
   name: ipv6-loadbalancers
@@ -35,7 +35,7 @@ spec:
 
 ---
 # Multiple pools using different address ranges
-apiVersion: cilium.io/v2alpha1
+apiVersion: cilium.io/v2
 kind: CiliumLoadBalancerIPPool
 metadata:
   name: ipv6-metallb
@@ -49,7 +49,7 @@ spec:
       metallb.universe.tf/address-pool: ipv6
 
 ---
-apiVersion: cilium.io/v2alpha1
+apiVersion: cilium.io/v2
 kind: CiliumLoadBalancerIPPool
 metadata:
   name: ipv6-egress
@@ -69,7 +69,7 @@ spec:
 
 ---
 # Cilium LoadBalancer IP Pool using subnet (Mode 2)
-apiVersion: cilium.io/v2alpha1
+apiVersion: cilium.io/v2
 kind: CiliumLoadBalancerIPPool
 metadata:
   name: ipv6-advanced-lb
@@ -81,7 +81,7 @@ spec:
 
 ---
 # Cilium LoadBalancer IP Pool for DMZ services (Mode 2)
-apiVersion: cilium.io/v2alpha1
+apiVersion: cilium.io/v2
 kind: CiliumLoadBalancerIPPool
 metadata:
   name: ipv6-dmz
@@ -103,7 +103,7 @@ spec:
 ---
 # CiliumCIDRGroup for network policies using address range
 # Note: Uses the approximate CIDR that contains the range
-apiVersion: cilium.io/v2alpha1
+apiVersion: cilium.io/v2
 kind: CiliumCIDRGroup
 metadata:
   name: lb-network
@@ -116,7 +116,7 @@ spec:
 
 ---
 # CiliumCIDRGroup using the full current prefix
-apiVersion: cilium.io/v2alpha1
+apiVersion: cilium.io/v2
 kind: CiliumCIDRGroup
 metadata:
   name: home-network
@@ -149,7 +149,7 @@ spec:
 # After the operator processes these, they'll look like:
 #
 # Mode 1 (Address Range) - uses start/stop for precise definition:
-# apiVersion: cilium.io/v2alpha1
+# apiVersion: cilium.io/v2
 # kind: CiliumLoadBalancerIPPool
 # metadata:
 #   name: ipv6-loadbalancers
@@ -163,7 +163,7 @@ spec:
 #       stop: "2001:db8:abcd:1:ffff:ffff:ffff:ffff"
 #
 # Mode 2 (Subnet) - uses CIDR:
-# apiVersion: cilium.io/v2alpha1
+# apiVersion: cilium.io/v2
 # kind: CiliumLoadBalancerIPPool
 # metadata:
 #   name: ipv6-advanced-lb
